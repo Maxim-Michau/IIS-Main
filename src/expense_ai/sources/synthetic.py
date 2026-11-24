@@ -38,6 +38,11 @@ class SyntheticBankSource(BankSource):
             ("GYM MEMBERSHIP", "Gym", "Health & Fitness", 30.0),
             ("PEARSON TEXTBOOK", "Textbook", "Education", 48.0),
             ("CAMPUS PRINTING", "Printing", "Education", 6.0),
+            ("PAYPAL *UNKNOWN MERCHANT", "paypal unknown", "Shopping", 42.0),
+            ("AMZN MARKETPLACE", "Amazon", "Shopping", 29.0),
+            ("CO-OP 1845", "Co-op", "Groceries", 16.0),
+            ("SQ *TINY CAFE", "Unknown Cafe", "Eating Out", 7.5),
+            ("CARD PAYMENT CAFE 77", "Unknown Cafe", "Eating Out", 8.5),
         ]
         rows: list[Transaction] = []
         for day in range(self.months * 30):
@@ -54,14 +59,18 @@ class SyntheticBankSource(BankSource):
                                                          minute=rng.choice([0, 15, 30, 45]),
                                                          second=0),
                     amount=amount, merchant_raw=merchant_raw, merchant_clean=merchant_clean,
-                    location=location, category=category, true_category=category,
+                    location=location, category="Other", true_category=category,
                     confidence_score=0.0, status="TENTATIVE", source="SYNTHETIC",
                 ))
         rent = datetime(2026, 1, 1)
         for month in range(self.months):
             rent_month = rent.replace(month=min(rent.month + month, 12),
                                       year=rent.year + ((rent.month + month - 1) // 12))
-            rows.append(Transaction(None, rent_month, 650.0, "STUDENT RENT", "Rent",
-                                    "Birmingham", "Rent & Bills", 1.0, "AUTO",
-                                    "Fixed recurring payment", "SYNTHETIC", "Rent & Bills", "RULE"))
+            rows.append(Transaction(
+                id=None, timestamp=rent_month, amount=650.0,
+                merchant_raw="STUDENT RENT", merchant_clean="Rent",
+                location="Birmingham", category="Other", confidence_score=0.0,
+                status="TENTATIVE", explanation="", source="SYNTHETIC",
+                true_category="Rent & Bills", method="RULE",
+            ))
         return rows

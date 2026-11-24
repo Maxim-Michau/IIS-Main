@@ -48,7 +48,7 @@ class ClarificationEngine:
                 questions_table.c.status == "PENDING"
             ).order_by(questions_table.c.created_at.desc())).mappings().all()
             transactions = {
-                row.id: row
+                row["id"]: dict(row)
                 for row in session.execute(select(transactions_table)).mappings()
             }
         ranked = []
@@ -113,6 +113,13 @@ class ClarificationEngine:
             )).first()
             if duplicate:
                 return
+            if question_type == "CATEGORY":
+                answered_merchants = session.execute(select(transactions_table.c.id).where(
+                    transactions_table.c.merchant_clean == transaction.merchant_clean,
+                    transactions_table.c.status.in_(["CONFIRMED", "CORRECTED"]),
+                )).all()
+                if answered_merchants:
+                    return
             session.execute(insert(questions_table).values(
                 transaction_id=transaction.id, question_type=question_type,
                 prompt_text=prompt, options="|".join(options), status="PENDING",
@@ -123,16 +130,18 @@ class ClarificationEngine:
     def answer_question(self, question_id: int, answer: str) -> None:
         """Record a pending question answer."""
         with Session(self.engine) as session:
-            row = session.execute(select(questions_table).where(
-                questions_table.c.id == question_id
-            ).mappings()).first()
+            row = session.execute(
+                select(questions_table).where(questions_table.c.id == question_id)
+            ).mappings().first()
             session.execute(update(questions_table).where(
                 questions_table.c.id == question_id
             ).values(status="ANSWERED", answer=answer, answered_at=datetime.now()))
             if row:
-                transaction_row = session.execute(select(transactions_table).where(
-                    transactions_table.c.id == row["transaction_id"]
-                ).mappings()).first()
+                transaction_row = session.execute(
+                    select(transactions_table).where(
+                        transactions_table.c.id == row["transaction_id"]
+                    )
+                ).mappings().first()
                 if transaction_row:
                     session.execute(update(transactions_table).where(
                         transactions_table.c.id == row["transaction_id"]

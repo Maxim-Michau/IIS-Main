@@ -19,13 +19,21 @@ class AppService:
         self.pipeline = pipeline
 
     def ingest(self, transaction: Transaction) -> Transaction:
-        """Categorise and persist one transaction."""
+        """Categorise, clarify and persist one transaction."""
         prediction = self.pipeline.categorise(transaction)
         transaction.category = prediction.category
         transaction.confidence_score = prediction.confidence_score
         transaction.explanation = prediction.explanation
         transaction.method = prediction.method
-        return self.repository.add(transaction)
+        transaction.true_category = None
+        saved = self.repository.add(transaction)
+        from expense_ai.ai.clarification import ClarificationEngine
+        clarification = ClarificationEngine(self.repository.engine)
+        clarification.decide(saved, prediction)
+        clarification.location_question(saved)
+        clarification.extra_info_question(saved)
+        clarification.recurring_question(saved)
+        return self.repository.update(saved)
 
     def ingest_all(self, transactions: Iterable[Transaction]) -> list[Transaction]:
         """Ingest a collection of transactions."""
@@ -52,9 +60,9 @@ class AppService:
         from sqlalchemy.orm import Session
         from expense_ai.storage.database import questions_table
         with Session(self.repository.engine) as session:
-            question = session.execute(select(questions_table).where(
-                questions_table.c.id == question_id
-            ).mappings()).first()
+            question = session.execute(
+                select(questions_table).where(questions_table.c.id == question_id)
+            ).mappings().first()
         transaction = None
         predicted = "Other"
         if question:
