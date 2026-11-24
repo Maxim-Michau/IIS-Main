@@ -17,13 +17,25 @@ An intelligent offline-first personal-finance assistant for a typical UK univers
 - Optional Anthropic SDK, python-dotenv
 
 ## Run
+**Windows PowerShell**
+```powershell
+py -m venv .venv
+.\\.venv\\Scripts\\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pip install -e .
+python scripts/generate_data.py
+python -m pytest -v
+streamlit run src/expense_ai/ui/app.py
+```
+
+**Mac/Linux**
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-export PYTHONPATH=src:.
+python -m pip install -r requirements.txt
+python -m pip install -e .
 python scripts/generate_data.py
-python -m pytest -q
+python -m pytest -v
 streamlit run src/expense_ai/ui/app.py
 ```
 

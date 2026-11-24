@@ -1,9 +1,5 @@
 """Expense-ai Streamlit entry point."""
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 import streamlit as st
 from config.settings import DATABASE_URL
 from expense_ai.storage.database import create_database
