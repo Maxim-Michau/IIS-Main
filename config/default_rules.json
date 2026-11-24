@@ -1,0 +1,22 @@
+{
+  "tesco": "Groceries",
+  "aldi": "Groceries",
+  "sainsbury": "Groceries",
+  "co-op": "Groceries",
+  "greggs": "Eating Out",
+  "costa": "Eating Out",
+  "uber eats": "Takeaways",
+  "deliveroo": "Takeaways",
+  "west midlands railway": "Transport",
+  "tfl": "Transport",
+  "national express": "Transport",
+  "spotify": "Subscriptions",
+  "netflix": "Subscriptions",
+  "amazon": "Shopping",
+  "student union": "Entertainment",
+  "gym": "Health & Fitness",
+  "railcard": "Subscriptions",
+  "rent": "Rent & Bills",
+  "textbook": "Education",
+  "printing": "Education"
+}
