@@ -1,26 +1,21 @@
 # expense-ai
 
-An intelligent offline-first personal-finance assistant for a typical UK university student.
+An offline-first personal-finance assistant for a UK university student, built with Python, Streamlit, SQLite and scikit-learn.
 
-**Prose: approximately 180 words.**
+**README prose word count: 262 words**
 
 ## Status
-- **Implemented:** synthetic ingestion, SQLite storage, rule/ML categorisation, mixed-initiative inbox, learning, insights, budgets, and offline advisor chat.
-- **Simulated:** push notifications and demonstration transaction generation.
-- **Planned:** `OpenBankingSource` is deliberately unimplemented for security.
 
-## Stack
-- Python 3.11+, pandas, SQLAlchemy/SQLite
-- scikit-learn, joblib, and TF-IDF/logistic regression
-- Streamlit and Plotly
-- Pydantic-compatible dataclasses, Faker, pytest
-- Optional Anthropic SDK, python-dotenv
+- **Implemented:** package installation, synthetic ingestion, SQLite storage, rule categorisation, Streamlit views, dashboard charts, transaction search/corrections, clarification decisions, feedback storage, insight calculations, offline advisor answers and evaluation scripts. These were exercised by the test suite or scripts.
+- **Limited:** ML training/calibration code exists, but a successful trained-model run was not completed in this review; it activates only once enough labelled rows exist.
+- **Simulated:** push notifications and the scripted feedback workflow.
+- **Planned:** `OpenBankingSource` is not implemented. No live bank connection is claimed.
 
-## Run
-**Windows PowerShell**
+## Run on Windows (PowerShell)
+
 ```powershell
 py -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m pip install -e .
 python scripts/generate_data.py
@@ -28,7 +23,8 @@ python -m pytest -v
 streamlit run src/expense_ai/ui/app.py
 ```
 
-**Mac/Linux**
+## Run on Mac/Linux
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -39,22 +35,28 @@ python -m pytest -v
 streamlit run src/expense_ai/ui/app.py
 ```
 
-## Optional LLM
-Copy `.env.example` to `.env`, set `ANTHROPIC_API_KEY`, and set `USE_LLM=true`. The app remains fully usable without a key and falls back safely on LLM errors.
+The app also offers an in-browser button to generate synthetic data when the database is empty.
+
+## Optional LLM key
+
+Copy `.env.example` to `.env`, set `USE_LLM=true`, and set `ANTHROPIC_API_KEY` to your own key. Never commit `.env`. LLM use is optional and every answer should remain grounded in repository data.
 
 ## Development record
-1. Skeleton, models, SQLite and repository tests
-2. Synthetic bank sources and seeded generator
-3. Rules, cascade pipeline and ingestion
-4. Streamlit dashboard and transaction page
-5. Calibrated ML categoriser and evaluation
-6. Clarification engine and simulated inbox
-7. Feedback learning and undo
-8. Insight engine and budgets
-9. Optional LLM and grounded advisor
-10. Simulation, evaluation and final cleanup
+
+1. Fixed editable package imports and pytest discovery.
+2. Replaced standalone page scripts with routed Streamlit views.
+3. Added calibration, clarification, feedback, insight and grounded-advisor behavior.
+4. Replaced placeholder evaluation with measured synthetic-data scripts and results.
+5. Cleaned README status and run instructions.
+
+## Measured evaluation
+
+See `docs/evaluation_results.md`. It contains only figures printed by the repository scripts.
 
 ## AI assistance
-GitHub Copilot was used to scaffold the repository; outputs were reviewed and changed by the author.
 
-Evaluation documents live in `docs/evaluation_results.md`.
+GitHub Copilot assisted with implementation and tests. The generated code was reviewed and modified in this repository.
+
+## Author's personally checked notes
+
+**[PLACEHOLDER: The author must fill this section after personally testing Windows, macOS/Linux, Streamlit, and the generated demo. No personal verification is claimed here.]**
