@@ -43,4 +43,12 @@ class Advisor:
             names = ", ".join(f"{name} (£{amount:.2f})"
                               for name, amount in totals.head(3).items())
             return f"Your top merchants are: {names}."
+        if "month" in lowered and ("compare" in lowered or "vs" in lowered):
+            frame["month"] = pd.to_datetime(frame["timestamp"]).dt.to_period("M").astype(str)
+            totals = frame.groupby("month")["amount"].sum()
+            if len(totals) < 2:
+                return "There is not enough data to compare two months."
+            previous, latest = totals.index[-2], totals.index[-1]
+            return (f"{latest} spending was £{totals.iloc[-1]:.2f}; "
+                    f"{previous} spending was £{totals.iloc[-2]:.2f}.")
         return "I can explain spending by category, compare your months, or list top merchants."

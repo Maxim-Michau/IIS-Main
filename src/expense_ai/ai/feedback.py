@@ -1,7 +1,7 @@
 """Learning from user feedback."""
 
 from datetime import datetime
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Transaction
@@ -65,6 +65,18 @@ class FeedbackLearner:
         with Session(self.engine) as session:
             rows = session.execute(select(feedback_table)).all()
         return len(rows) >= self.retrain_count
+
+    def metrics(self) -> dict[str, int]:
+        """Return durable, repository-level learning metrics."""
+        with Session(self.engine) as session:
+            rows = session.execute(select(feedback_table)).mappings().all()
+        confirmed = sum(row["predicted_category"] == row["chosen_category"] for row in rows)
+        corrected = len(rows) - confirmed
+        return {
+            "feedback_rows": len(rows),
+            "confirmed": confirmed,
+            "corrected": corrected,
+        }
 
     def _confirmation_count(self, merchant: str, category: str) -> int:
         """Count matching confirmed feedback rows."""

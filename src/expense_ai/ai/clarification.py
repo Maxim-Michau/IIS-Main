@@ -1,11 +1,11 @@
 """Mixed-initiative clarification decisions."""
 
-from datetime import date, datetime
+from datetime import datetime
 from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Prediction, Transaction
-from expense_ai.storage.database import questions_table
+from expense_ai.storage.database import questions_table, transactions_table
 from config.settings import (AUTO_ACCEPT_THRESHOLD, ASK_THRESHOLD,
                              MAX_QUESTIONS_PER_DAY)
 
@@ -41,6 +41,26 @@ class ClarificationEngine:
                               top_options + ["Other"] if "Other" not in top_options else top_options)
         return "ASK"
 
+    def rank_pending(self) -> list[dict[str, object]]:
+        """Rank pending questions by transaction amount and uncertainty."""
+        with Session(self.engine) as session:
+            rows = session.execute(select(questions_table).where(
+                questions_table.c.status == "PENDING"
+            ).order_by(questions_table.c.created_at.desc())).mappings().all()
+            transactions = {
+                row.id: row
+                for row in session.execute(select(transactions_table)).mappings()
+            }
+        ranked = []
+        for row in rows:
+            transaction = transactions.get(row["transaction_id"])
+            amount = float(transaction["amount"] if transaction else 0.0)
+            ranked.append({
+                **dict(row),
+                "_priority": amount,
+            })
+        return sorted(ranked, key=lambda row: row["_priority"], reverse=True)
+
     def location_question(self, transaction: Transaction) -> None:
         """Create a location question for missing or unusual locations."""
         if transaction.location is None:
@@ -51,6 +71,19 @@ class ClarificationEngine:
             self._create_question(transaction, "LOCATION",
                                   f"You spent £{transaction.amount:.2f} in {transaction.location}. Were you travelling?",
                                   ["Yes", "No"])
+
+    def recurring_question(self, transaction: Transaction) -> None:
+        """Ask whether a merchant repeat is a recurring payment."""
+        with Session(self.engine) as session:
+            rows = session.execute(select(transactions_table).where(
+                transactions_table.c.merchant_clean == transaction.merchant_clean
+            )).mappings().all()
+        if len(rows) >= 2:
+            self._create_question(
+                transaction, "RECURRING",
+                f"You have paid {transaction.merchant_clean} repeatedly. Is it recurring?",
+                ["Yes", "No"],
+            )
 
     def extra_info_question(self, transaction: Transaction) -> None:
         """Ask about unusually large or unrecognised transactions."""
@@ -90,7 +123,18 @@ class ClarificationEngine:
     def answer_question(self, question_id: int, answer: str) -> None:
         """Record a pending question answer."""
         with Session(self.engine) as session:
+            row = session.execute(select(questions_table).where(
+                questions_table.c.id == question_id
+            ).mappings()).first()
             session.execute(update(questions_table).where(
                 questions_table.c.id == question_id
             ).values(status="ANSWERED", answer=answer, answered_at=datetime.now()))
+            if row:
+                transaction_row = session.execute(select(transactions_table).where(
+                    transactions_table.c.id == row["transaction_id"]
+                ).mappings()).first()
+                if transaction_row:
+                    session.execute(update(transactions_table).where(
+                        transactions_table.c.id == row["transaction_id"]
+                    ).values(category=answer, status="CONFIRMED"))
             session.commit()

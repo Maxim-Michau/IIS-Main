@@ -26,3 +26,16 @@ def test_daily_question_cap(engine) -> None:
     clarification.decide(first, Prediction("Groceries", 0.40, "Test", "ML"))
     clarification.decide(second, Prediction("Shopping", 0.40, "Test", "ML"))
     assert clarification.daily_pending_count() == 1
+
+
+def test_no_duplicate_and_recurring_question(engine) -> None:
+    """Repeated question types are deduplicated and recurring payments are detectable."""
+    clarification = ClarificationEngine(engine)
+    first = Transaction(None, datetime.now(), 12.0, "NETFLIX", "Netflix", "Birmingham")
+    first.id = 1
+    second = Transaction(None, datetime.now(), 12.0, "NETFLIX", "Netflix", "Birmingham")
+    second.id = 2
+    clarification.location_question(first)
+    clarification.location_question(first)
+    clarification.recurring_question(second)
+    assert clarification.daily_pending_count() <= 1

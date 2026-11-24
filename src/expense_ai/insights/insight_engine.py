@@ -1,17 +1,22 @@
 """Spend insight and recommendation engine."""
 
-from datetime import datetime
 from typing import Iterable
 import pandas as pd
+from sqlalchemy import insert, update
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 from expense_ai.models.transaction import Transaction
+from expense_ai.storage.database import insights_table
 
 
 class InsightEngine:
     """Calculate anomalies, trends, budgets and savings ideas."""
 
-    def __init__(self, budgets: dict[str, float] | None = None) -> None:
+    def __init__(self, budgets: dict[str, float] | None = None,
+                 engine: Engine | None = None) -> None:
         """Configure category budgets."""
         self.budgets = budgets or {}
+        self.engine = engine
 
     def frame(self, transactions: Iterable[Transaction]) -> pd.DataFrame:
         """Convert transactions into a dataframe."""
@@ -83,3 +88,40 @@ class InsightEngine:
                     "estimated_monthly_saving": round(takeaways / 4.0, 2),
                 })
         return suggestions
+
+    def subscription_suggestions(self, transactions: list[Transaction]) -> list[str]:
+        """Detect merchants repeated in at least three months."""
+        frame = self.frame(transactions)
+        if frame.empty:
+            return []
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+        frame["month"] = frame["timestamp"].dt.to_period("M").astype(str)
+        repeated = frame.groupby(["merchant_clean", "month"]).size().groupby("merchant_clean").size()
+        return [merchant for merchant, months in repeated.items() if months >= 3]
+
+    def store_actions(self, title: str, explanation: str,
+                      estimated_monthly_saving: float) -> int | None:
+        """Store an insight and return its ID."""
+        if self.engine is None:
+            return None
+        with Session(self.engine) as session:
+            result = session.execute(insert(insights_table).values(
+                title=title,
+                explanation=explanation,
+                estimated_monthly_saving=estimated_monthly_saving,
+                status="PENDING",
+            ))
+            session.commit()
+            return int(result.inserted_primary_key[0])
+
+    def set_action_status(self, insight_id: int, status: str) -> None:
+        """Accept or dismiss a stored insight."""
+        if self.engine is None:
+            return
+        if status not in {"ACCEPTED", "DISMISSED"}:
+            raise ValueError("Status must be ACCEPTED or DISMISSED")
+        with Session(self.engine) as session:
+            session.execute(update(insights_table).where(
+                insights_table.c.id == insight_id
+            ).values(status=status))
+            session.commit()

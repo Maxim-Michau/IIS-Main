@@ -7,6 +7,7 @@ from scipy import sparse
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import FeatureUnion
+from sklearn.calibration import CalibratedClassifierCV
 from expense_ai.models.transaction import Prediction, Transaction
 from expense_ai.ai.categorisers.base import Categoriser
 from config.settings import MODEL_PATH
@@ -26,7 +27,9 @@ class MLCategoriser(Categoriser):
 
     def train(self, merchants: Sequence[str], categories: Sequence[str],
               amounts: Sequence[float], hours: Sequence[int]) -> None:
-        """Train a probabilistic classifier."""
+        """Train a calibrated probabilistic classifier."""
+        if len(set(categories)) < 2 or len(categories) < 10:
+            raise ValueError("At least 10 labelled rows and 2 categories are required")
         text_vectorizer = TfidfVectorizer(analyzer="char", ngram_range=(2, 4))
         word_vectorizer = TfidfVectorizer(analyzer="word")
         features = FeatureUnion([("char", text_vectorizer), ("word", word_vectorizer)])
@@ -34,7 +37,10 @@ class MLCategoriser(Categoriser):
         numeric = sparse.csr_matrix([
             [self._amount_band(amount), hour / 24.0] for amount, hour in zip(amounts, hours)
         ])
-        classifier = LogisticRegression(max_iter=300, class_weight="balanced")
+        base = LogisticRegression(max_iter=300, class_weight="balanced")
+        counts = {category: list(categories).count(category) for category in set(categories)}
+        cv = max(2, min(3, min(counts.values())))
+        classifier = CalibratedClassifierCV(base, method="sigmoid", cv=cv)
         classifier.fit(sparse.hstack([merchant_features, numeric]), categories)
         self.model = (features, classifier)
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,8 +60,39 @@ class MLCategoriser(Categoriser):
         index = int(probabilities.argmax())
         category = str(classifier.classes_[index])
         confidence = float(probabilities[index])
+        matched = self._top_tokens(features, classifier, category, transaction.merchant_clean)
+        detail = f"Matched on: {', '.join(repr(token) for token in matched)}" if matched else (
+            f"Similar to merchants labelled {category}"
+        )
         return Prediction(category, confidence,
-                          f"Similar to merchants you've labelled {category}.", "ML")
+                          f"{detail}.", "ML")
+
+    @staticmethod
+    def _top_tokens(features: FeatureUnion, classifier: object, category: str,
+                     merchant: str) -> list[str]:
+        """Return matching merchant tokens with high classifier weight."""
+        word_vectorizer = dict(features.transformer_list).get("word")
+        if word_vectorizer is None:
+            return []
+        try:
+            class_index = list(classifier.classes_).index(category)
+            calibrated = getattr(classifier, "calibrated_classifiers_", [])
+            estimator = calibrated[0].estimator if calibrated else classifier
+            coefficients = estimator.coef_
+            if coefficients.ndim == 1:
+                weights = coefficients
+            else:
+                weights = coefficients[class_index if class_index < len(coefficients) else 0]
+        except (AttributeError, ValueError, IndexError):
+            return []
+        vocabulary = word_vectorizer.vocabulary_
+        merchant_tokens = {token for token in merchant.lower().replace("/", " ").split()}
+        ranked = sorted(
+            ((weights[index], token) for token, index in vocabulary.items()
+             if token in merchant_tokens),
+            reverse=True,
+        )
+        return [token for _, token in ranked[:3]]
 
     @staticmethod
     def _amount_band(amount: float) -> float:
