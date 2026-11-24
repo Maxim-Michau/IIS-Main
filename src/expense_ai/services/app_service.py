@@ -17,6 +17,15 @@ class AppService:
         """Initialise service dependencies."""
         self.repository = TransactionRepository(engine)
         self.pipeline = pipeline
+        from expense_ai.ai.clarification import ClarificationEngine
+        self.clarification = ClarificationEngine(engine)
+
+    def configure_clarification(self, auto_threshold: float, ask_threshold: float,
+                                max_questions_per_day: int) -> None:
+        """Apply live thresholds to subsequent ingestion."""
+        self.clarification.auto_threshold = auto_threshold
+        self.clarification.ask_threshold = ask_threshold
+        self.clarification.max_questions_per_day = max_questions_per_day
 
     def ingest(self, transaction: Transaction) -> Transaction:
         """Categorise, clarify and persist one transaction."""
@@ -27,8 +36,7 @@ class AppService:
         transaction.method = prediction.method
         transaction.true_category = None
         saved = self.repository.add(transaction)
-        from expense_ai.ai.clarification import ClarificationEngine
-        clarification = ClarificationEngine(self.repository.engine)
+        clarification = self.clarification
         clarification.decide(saved, prediction)
         clarification.location_question(saved)
         clarification.extra_info_question(saved)
