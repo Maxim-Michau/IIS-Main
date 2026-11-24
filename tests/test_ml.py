@@ -34,6 +34,7 @@ def test_ml_training_uses_feedback_not_true_category(engine, tmp_path, monkeypat
         )
         saved = service.ingest(transaction)
         learner.record_answer(saved, category, category)
+        saved.status = "CONFIRMED"
         service.repository.update(saved)
         transactions.append(transaction)
     captured = {}

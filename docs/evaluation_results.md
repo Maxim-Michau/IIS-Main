@@ -1,25 +1,27 @@
 # Evaluation Results
 
-Measured on 2026-11-24 with the repository's seeded `SyntheticBankSource(seed=2026, months=6)` and `RuleCategoriser`.
-Commands: `python scripts/evaluate.py` and `python scripts/simulate_user.py`.
+Measured on 2026-11-24 by running `python scripts/evaluate.py` with the seeded
+`SyntheticBankSource(seed=7, months=4)` and the real `AppService.ingestion`,
+`ClarificationEngine`, and `RuleCategoriser` cascade. The daily question cap was
+set to 100 for the threshold matrix so it did not erase threshold effects.
 
-## Categorisation
+## Real question results
 
-- Transactions evaluated: 725
-- Accuracy: 89.6552%
-- Errors: 75
-- Questions at threshold 0.50: 79 (10.3448%)
-- Questions at threshold 0.65: 79 (10.3448%)
-- Questions at threshold 0.85: 79 (10.3448%)
-- Error rate among predictions at thresholds 0.50, 0.65, and 0.85: 0.0000%
+Before feedback, accuracy against hidden `true_category` labels was 78.8889%.
+After four 90-transaction batches and 100 scripted answers per week, accuracy
+after feedback ranged from 98.6111% to 98.8889%, depending on thresholds.
+The measured error rate after feedback ranged from 1.1111% to 1.3889%.
 
-## Scripted feedback simulation
+| Thresholds (auto/ask) | Questions | Weekly questions | Before accuracy | After accuracy | Error rate |
+|---|---:|---:|---:|---:|---:|
+| 0.95 / 0.70 | 400 | 100 / 100 / 100 / 100 | 78.8889% | 98.6111% | 1.3889% |
+| 0.85 / 0.50 | 400 | 100 / 100 / 100 / 100 | 78.8889% | 98.8889% | 1.1111% |
+| 0.70 / 0.30 | 400 | 100 / 100 / 100 / 100 | 78.8889% | 98.8889% | 1.1111% |
 
-The script applied the simulated learner's merchant answers for four weekly batches and measured resulting prediction accuracy against `true_category`.
+## Learning and thresholds
 
-| Week | Questions | Answers in batch | Accuracy |
-|---:|---:|---:|---:|
-| 1 | 79 | 15 | 89.1034% |
-| 2 | 79 | 602 | 100.0000% |
-| 3 | 79 | 689 | 100.0000% |
-| 4 | 79 | 690 | 100.0000% |
+Learning reduced prediction error in this run, from 21.1111% to 1.1111%-1.3889%.
+However, all three threshold pairs asked 400 questions in total and produced
+the same weekly counts. Therefore, these particular threshold values did not
+change the question count for this seeded dataset; the result is reported rather
+than presented as a threshold effect.

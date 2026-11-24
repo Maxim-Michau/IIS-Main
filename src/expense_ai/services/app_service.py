@@ -144,6 +144,11 @@ class AppService:
         labelled = [item for item in labelled if item.category != "Other"]
         if len(labelled) < 10 or len({item.category for item in labelled}) < 2:
             return False
+        category_counts = {}
+        for item in labelled:
+            category_counts[item.category] = category_counts.get(item.category, 0) + 1
+        if min(category_counts.values()) < 2:
+            return False
         ml.train(
             [item.merchant_clean or item.merchant_raw for item in labelled],
             [item.category for item in labelled],

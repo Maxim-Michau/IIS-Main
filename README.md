@@ -2,13 +2,13 @@
 
 An offline-first personal-finance assistant for a UK university student, built with Python, Streamlit, SQLite and scikit-learn.
 
-**README prose word count: 262 words**
+**README prose word count: 267 words**
 
 ## Status
 
-- **Implemented:** package installation, synthetic ingestion, SQLite storage, rule categorisation, Streamlit views, dashboard charts, transaction search/corrections, clarification decisions, feedback storage, insight calculations, offline advisor answers and evaluation scripts. These were exercised by the test suite or scripts.
-- **Limited:** ML training/calibration code exists, but a successful trained-model run was not completed in this review; it activates only once enough labelled rows exist.
-- **Simulated:** push notifications and the scripted feedback workflow.
+- **Implemented:** package installation, SQLite storage, synthetic ingestion through the categorisation and clarification pipeline, rule categorisation, Streamlit routing, chat advisor, monthly budgets, insight cards, live settings, feedback storage, and evaluation scripts. The full pytest suite and scripts were run.
+- **Limited:** calibrated ML training exists and activates from confirmed/corrected or high-confidence rule labels, but no separate retrained-model smoke run was completed.
+- **Simulated:** push notifications and the scripted feedback workflow; app transaction simulation creates a fresh local batch.
 - **Planned:** `OpenBankingSource` is not implemented. No live bank connection is claimed.
 
 ## Run on Windows (PowerShell)

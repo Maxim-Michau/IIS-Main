@@ -39,7 +39,9 @@ class MLCategoriser(Categoriser):
         ])
         base = LogisticRegression(max_iter=300, class_weight="balanced")
         counts = {category: list(categories).count(category) for category in set(categories)}
-        cv = max(2, min(3, min(counts.values())))
+        cv = min(3, min(counts.values()))
+        if cv < 2:
+            raise ValueError("Each category needs at least 2 training examples")
         classifier = CalibratedClassifierCV(base, method="sigmoid", cv=cv)
         classifier.fit(sparse.hstack([merchant_features, numeric]), categories)
         self.model = (features, classifier)
