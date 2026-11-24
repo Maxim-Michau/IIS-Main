@@ -127,8 +127,6 @@ class AppService:
         if ml is None:
             ml = MLCategoriser()
             self.pipeline.categorisers.append(ml)
-        if ml is not None and ml.is_trained():
-            return False
         labelled: list[Transaction] = []
         with Session(self.repository.engine) as session:
             from expense_ai.storage.database import feedback_table
