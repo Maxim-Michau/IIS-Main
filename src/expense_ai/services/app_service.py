@@ -5,9 +5,9 @@ from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Transaction
 from expense_ai.storage.repository import TransactionRepository
 from expense_ai.ai.pipeline import CategorisationPipeline
-from sqlalchemy import select
+from sqlalchemy import select, delete, insert
 from sqlalchemy.orm import Session
-from expense_ai.storage.database import questions_table
+from expense_ai.storage.database import questions_table, budgets_table, insights_table
 
 
 class AppService:
@@ -51,6 +51,42 @@ class AppService:
             return [dict(row) for row in session.execute(
                 select(questions_table).where(questions_table.c.status == "PENDING")
             ).mappings().all()]
+
+    def save_budget(self, category: str, monthly_limit: float, month: str) -> None:
+        """Create or replace a category budget for a calendar month."""
+        with Session(self.repository.engine) as session:
+            existing = session.execute(select(budgets_table).where(
+                budgets_table.c.category == category,
+                budgets_table.c.month == month,
+            ).limit(1)).first()
+            if existing:
+                session.execute(budgets_table.update().where(
+                    budgets_table.c.category == category,
+                    budgets_table.c.month == month,
+                ).values(monthly_limit=monthly_limit))
+            else:
+                session.execute(insert(budgets_table).values(
+                    category=category,
+                    monthly_limit=monthly_limit,
+                    month=month,
+                ))
+            session.commit()
+
+    def get_budgets(self, month: str) -> dict[str, float]:
+        """Return budgets configured for a calendar month."""
+        with Session(self.repository.engine) as session:
+            rows = session.execute(select(budgets_table).where(
+                budgets_table.c.month == month
+            )).mappings().all()
+        return {row["category"]: float(row["monthly_limit"]) for row in rows}
+
+    def get_pending_insights(self) -> list[dict[str, object]]:
+        """Return insight cards awaiting Accept or Dismiss."""
+        with Session(self.repository.engine) as session:
+            rows = session.execute(select(insights_table).where(
+                insights_table.c.status == "PENDING"
+            )).mappings().all()
+        return [dict(row) for row in rows]
 
     def answer_question(self, question_id: int, answer: str) -> None:
         """Answer a pending clarification question."""

@@ -48,6 +48,7 @@ budgets_table = Table(
     Column("id", Integer, primary_key=True),
     Column("category", String, nullable=False),
     Column("monthly_limit", Float, nullable=False),
+    Column("month", String, nullable=False),
 )
 merchant_rules_table = Table(
     "merchant_rules", metadata,
@@ -74,4 +75,15 @@ def create_database(database_url: str = DATABASE_URL) -> object:
         database_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(database_url)
     metadata.create_all(engine)
+    if database_url != "sqlite://":
+        with engine.begin() as connection:
+            try:
+                columns = connection.exec_driver_sql("PRAGMA table_info(budgets)").fetchall()
+                names = {row[1] for row in columns}
+                if "month" not in names:
+                    connection.exec_driver_sql(
+                        "ALTER TABLE budgets ADD COLUMN month TEXT NOT NULL DEFAULT '1970-01'"
+                    )
+            except Exception:
+                pass
     return engine

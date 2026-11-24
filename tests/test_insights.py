@@ -29,3 +29,18 @@ def test_anomaly_subscription_and_month_trend() -> None:
     engine = InsightEngine({"Subscriptions": 100.0})
     assert engine.category_anomalies(transactions)
     assert "Netflix" in engine.subscription_suggestions(transactions)
+
+
+def test_takeaways_budget_below_actual_spend() -> None:
+    """A £150 Takeaways budget warns when actual monthly spend exceeds it."""
+    transactions = [
+        Transaction(None, datetime(2026, 11, 5), 90.0,
+                    "DELIVEROO", "Deliveroo", "Birmingham", "Takeaways"),
+        Transaction(None, datetime(2026, 11, 12), 80.0,
+                    "UBER EATS", "Uber Eats", "Birmingham", "Takeaways"),
+    ]
+    warnings = InsightEngine({"Takeaways": 150.0}).budget_warnings(
+        transactions, 2026, 11
+    )
+    assert warnings
+    assert "£170.00" in warnings[0]
