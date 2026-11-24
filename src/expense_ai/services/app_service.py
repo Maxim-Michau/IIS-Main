@@ -85,16 +85,27 @@ class AppService:
             self.pipeline.categorisers.append(ml)
         if ml is not None and ml.is_trained():
             return False
-        transactions = [item for item in self.get_transactions()
-                        if item.true_category or item.category]
-        transactions = [item for item in transactions
-                        if item.true_category and item.true_category != "Other"]
-        if len(transactions) < 10 or len({item.true_category for item in transactions}) < 2:
+        labelled: list[Transaction] = []
+        with Session(self.repository.engine) as session:
+            from expense_ai.storage.database import feedback_table
+            feedback = session.execute(select(feedback_table)).mappings().all()
+        for row in feedback:
+            transaction = self.repository.get(row["transaction_id"])
+            if transaction:
+                transaction.category = row["chosen_category"]
+                labelled.append(transaction)
+        for item in self.get_transactions():
+            if item.method == "RULE" and item.confidence_score >= 0.85:
+                labelled.append(item)
+        labelled = [item for item in labelled if item.category != "Other"]
+        if len(labelled) < 10 or len({item.category for item in labelled}) < 2:
             return False
         ml.train(
-            [item.merchant_clean or item.merchant_raw for item in transactions],
-            [item.true_category for item in transactions],
-            [item.amount for item in transactions],
-            [item.timestamp.hour for item in transactions],
+            [item.merchant_clean or item.merchant_raw for item in labelled],
+            [item.category for item in labelled],
+            [item.amount for item in labelled],
+            [item.timestamp.hour for item in labelled],
         )
+        if ml not in self.pipeline.categorisers:
+            self.pipeline.categorisers.append(ml)
         return True

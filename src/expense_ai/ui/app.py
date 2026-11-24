@@ -1,15 +1,10 @@
 """Expense-ai Streamlit entry point."""
 
-import os
-
 import streamlit as st
 
 from config import settings
-from expense_ai.ai.categorisers.llm import LLMCategoriser
-from expense_ai.ai.categorisers.ml import MLCategoriser
-from expense_ai.ai.categorisers.rule import RuleCategoriser
-from expense_ai.ai.pipeline import CategorisationPipeline
 from expense_ai.services.app_service import AppService
+from expense_ai.services.pipeline_factory import build_pipeline
 from expense_ai.storage.database import create_database
 from expense_ai.ui.views.advisor import render as render_advisor
 from expense_ai.ui.views.budgets import render as render_budgets
@@ -19,19 +14,6 @@ from expense_ai.ui.views.settings import render as render_settings
 from expense_ai.ui.views.transactions import render as render_transactions
 
 
-def build_pipeline(settings_module: object = settings) -> CategorisationPipeline:
-    """Build the full rule, optional ML, and optional LLM cascade."""
-    categorisers = [RuleCategoriser()]
-    ml = MLCategoriser(settings_module.MODEL_PATH)
-    if ml.is_trained():
-        categorisers.append(ml)
-    llm_enabled = bool(
-        getattr(settings_module, "USE_LLM", False)
-        and os.getenv("ANTHROPIC_API_KEY")
-    )
-    if llm_enabled:
-        categorisers.append(LLMCategoriser(enabled=True))
-    return CategorisationPipeline(categorisers)
 
 
 @st.cache_resource
