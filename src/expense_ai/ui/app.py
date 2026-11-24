@@ -1,25 +1,76 @@
 """Expense-ai Streamlit entry point."""
 
+import os
+
 import streamlit as st
-from config.settings import DATABASE_URL
-from expense_ai.storage.database import create_database
+
+from config import settings
+from expense_ai.ai.categorisers.llm import LLMCategoriser
+from expense_ai.ai.categorisers.ml import MLCategoriser
 from expense_ai.ai.categorisers.rule import RuleCategoriser
 from expense_ai.ai.pipeline import CategorisationPipeline
 from expense_ai.services.app_service import AppService
+from expense_ai.storage.database import create_database
+from expense_ai.ui.views.advisor import render as render_advisor
+from expense_ai.ui.views.budgets import render as render_budgets
+from expense_ai.ui.views.dashboard import render as render_dashboard
+from expense_ai.ui.views.inbox import render as render_inbox
+from expense_ai.ui.views.settings import render as render_settings
+from expense_ai.ui.views.transactions import render as render_transactions
+
+
+def build_pipeline(settings_module: object = settings) -> CategorisationPipeline:
+    """Build the full rule, optional ML, and optional LLM cascade."""
+    categorisers = [RuleCategoriser()]
+    ml = MLCategoriser(settings_module.MODEL_PATH)
+    if ml.is_trained():
+        categorisers.append(ml)
+    llm_enabled = bool(
+        getattr(settings_module, "USE_LLM", False)
+        and os.getenv("ANTHROPIC_API_KEY")
+    )
+    if llm_enabled:
+        categorisers.append(LLMCategoriser(enabled=True))
+    return CategorisationPipeline(categorisers)
+
+
+@st.cache_resource
+def get_service() -> AppService:
+    """Create one shared application service per Streamlit process."""
+    engine = create_database(settings.DATABASE_URL)
+    return AppService(engine, build_pipeline(settings))
 
 
 st.set_page_config(page_title="expense-ai", page_icon="£", layout="wide")
+service = get_service()
+
+pending = service.get_pending_questions()
 st.sidebar.title("expense-ai")
 st.sidebar.caption("Simulated student finance assistant")
-st.sidebar.button("Inbox 🔔")
+st.sidebar.radio("Navigation", ["Dashboard", "Inbox", "Transactions", "Advisor", "Budgets", "Settings"],
+                 index=0, format_func=lambda name: f"Inbox ({len(pending)})" if name == "Inbox" else name,
+                 key="expense_ai_view")
 
-engine = create_database(DATABASE_URL)
-service = AppService(engine, CategorisationPipeline([RuleCategoriser()]))
 transactions = service.get_transactions()
-
-st.title("Expense AI")
 if not transactions:
-    st.info("Generate sample data with `python scripts/generate_data.py`.")
+    st.title("Expense AI")
+    st.warning("The database is empty. Generate the reproducible synthetic demo to get started.")
+    if st.button("Generate synthetic data"):
+        from expense_ai.sources.synthetic import SyntheticBankSource
+        service.ingest_all(SyntheticBankSource().fetch_transactions())
+        st.cache_resource.clear()
+        st.rerun()
 else:
-    st.metric("Transactions", len(transactions))
-    st.metric("Total spend", f"£{sum(item.amount for item in transactions):,.2f}")
+    selected = st.session_state.expense_ai_view
+    if selected == "Dashboard":
+        render_dashboard(service)
+    elif selected == "Inbox":
+        render_inbox(service)
+    elif selected == "Transactions":
+        render_transactions(service)
+    elif selected == "Advisor":
+        render_advisor(service)
+    elif selected == "Budgets":
+        render_budgets(service)
+    else:
+        render_settings(service)

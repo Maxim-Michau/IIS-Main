@@ -20,6 +20,10 @@ class MLCategoriser(Categoriser):
         self.model_path = Path(model_path)
         self.model = joblib.load(self.model_path) if self.model_path.exists() else None
 
+    def is_trained(self) -> bool:
+        """Return whether a persisted or in-memory model is available."""
+        return self.model is not None
+
     def train(self, merchants: Sequence[str], categories: Sequence[str],
               amounts: Sequence[float], hours: Sequence[int]) -> None:
         """Train a probabilistic classifier."""

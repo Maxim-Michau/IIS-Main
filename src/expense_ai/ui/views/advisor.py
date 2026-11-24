@@ -1,4 +1,4 @@
-"""Advisor chat page."""
+"""Advisor chat view."""
 
 import streamlit as st
 from expense_ai.ai.advisor import Advisor
