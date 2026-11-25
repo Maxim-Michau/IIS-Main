@@ -49,3 +49,29 @@ def test_advisor_llm_mock_stays_grounded() -> None:
     assert "£650.00" in Advisor(transactions, MockLLM()).answer_with_llm(
         "How much did I spend on rent?"
     )
+
+
+def test_chart_for_monthly_category_and_merchant_questions() -> None:
+    """Charts use named month data and match category or merchant intent."""
+    transactions = [
+        Transaction(None, datetime(2026, 10, 5), 10.0, "Takeout A", "Takeout A",
+                    "Birmingham", "Takeaways"),
+        Transaction(None, datetime(2026, 10, 8), 20.0, "Tesco", "Tesco",
+                    "Birmingham", "Groceries"),
+        Transaction(None, datetime(2026, 11, 5), 15.0, "Takeout A", "Takeout A",
+                    "Birmingham", "Takeaways"),
+    ]
+    advisor = Advisor(transactions)
+
+    category_chart = advisor.chart_for("How much did I spend on Takeaways by month?")
+    merchant_chart = advisor.chart_for("Show top merchants")
+    monthly_chart = advisor.chart_for("Show spending by month")
+
+    assert category_chart is not None
+    assert category_chart.layout.title.text == "Takeaways spending by month"
+    assert list(category_chart.data[0].x) == ["2026-10", "2026-11"]
+    assert list(category_chart.data[0].y) == [10.0, 15.0]
+    assert merchant_chart is not None
+    assert merchant_chart.layout.title.text == "Top merchants"
+    assert monthly_chart is not None
+    assert list(monthly_chart.data[0].x) == ["2026-10", "2026-11"]

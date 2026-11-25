@@ -127,14 +127,35 @@ class Advisor:
         frame = pd.DataFrame([vars(transaction) for transaction in self.transactions])
         frame["timestamp"] = pd.to_datetime(frame["timestamp"])
         lowered = question.lower()
-        if "top merchant" in lowered:
+        if "merchant" in lowered:
             totals = frame.groupby("merchant_clean")["amount"].sum().nlargest(5).reset_index()
             return px.bar(totals, x="merchant_clean", y="amount", title="Top merchants")
+        categories = frame["category"].dropna().astype(str).unique().tolist()
+        matched_categories = [
+            category for category in categories if category.casefold() in lowered
+        ]
+        category_synonyms = {
+            "food": ["Groceries", "Eating Out", "Takeaways"],
+            "rent": ["Rent & Bills"],
+            "bills": ["Rent & Bills", "Subscriptions"],
+            "going out": ["Entertainment"],
+        }
+        for synonym, names in category_synonyms.items():
+            if synonym in lowered:
+                matched_categories.extend(
+                    category for category in names if category in categories
+                )
+        matched_categories = list(dict.fromkeys(matched_categories))
+        if matched_categories:
+            frame = frame[frame["category"].isin(matched_categories)]
+            title = f"{' + '.join(matched_categories)} spending by month"
+        else:
+            title = "Monthly spending"
         if "month" in lowered or "how much" in lowered or "spent" in lowered:
-            totals = frame.groupby(frame["timestamp"].dt.to_period("M").astype(str),
-                                   as_index=False)["amount"].sum()
+            frame["month"] = frame["timestamp"].dt.to_period("M").astype(str)
+            totals = frame.groupby("month", as_index=False)["amount"].sum()
             if len(totals):
-                return px.bar(totals, x="timestamp", y="amount", title="Monthly spending")
+                return px.bar(totals, x="month", y="amount", title=title)
         return None
 
     @staticmethod
