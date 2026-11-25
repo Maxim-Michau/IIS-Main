@@ -53,7 +53,3 @@ See `docs/evaluation_results.md` for measured synthetic evaluation results.
 ## AI assistance
 
 GitHub Copilot assisted with implementation and tests. The generated code was reviewed and modified in this repository.
-
-## Author's personally checked notes
-
-**[PLACEHOLDER: The author must fill this section after personally testing Windows, macOS/Linux, Streamlit, and the generated demo. No personal verification is claimed here.]**
