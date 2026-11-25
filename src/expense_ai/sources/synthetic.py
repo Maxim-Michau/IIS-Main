@@ -1,6 +1,6 @@
 """Seeded synthetic bank source."""
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import random
 from typing import Iterable
 from expense_ai.models.transaction import Transaction
@@ -10,15 +10,28 @@ from expense_ai.sources.bank_source import BankSource
 class SyntheticBankSource(BankSource):
     """Generate realistic Birmingham transactions with simulated bank MCC fields."""
 
-    def __init__(self, seed: int = 2026, months: int = 6) -> None:
-        """Initialise reproducible data parameters."""
+    def __init__(
+        self,
+        seed: int = 2026,
+        months: int = 6,
+        end_date: date | datetime | None = None,
+    ) -> None:
+        """Initialise seeded data parameters and an optional fixed window end."""
         self.seed = seed
         self.months = months
+        self.end_date = end_date
 
     def fetch_transactions(self) -> Iterable[Transaction]:
-        """Generate approximately six months of transactions."""
+        """Generate transactions from the first month through the configured end date."""
         rng = random.Random(self.seed)
-        start = datetime(2026, 1, 1)
+        end = self.end_date or date.today()
+        end_day = end.date() if isinstance(end, datetime) else end
+        start_month_index = end_day.year * 12 + end_day.month - 1 - (self.months - 1)
+        start = date(
+            start_month_index // 12,
+            start_month_index % 12 + 1,
+            1,
+        )
         merchants = [
             ("TESCO STORES 4521", "Tesco", "Groceries", 18.0),
             ("ALDI PAY", "Aldi", "Groceries", 24.0),
@@ -52,8 +65,8 @@ class SyntheticBankSource(BankSource):
             "Shopping": "5941", "Entertainment": "5812", "Education": "5942",
             "Health & Fitness": "7997",
         }
-        for day in range(self.months * 30):
-            current = start + timedelta(days=day)
+        for day in range((end_day - start).days + 1):
+            current = datetime.combine(start + timedelta(days=day), datetime.min.time())
             count = 3 if day % 3 else 5
             if day > 120:
                 count += 1
@@ -70,10 +83,16 @@ class SyntheticBankSource(BankSource):
                     confidence_score=0.0, status="TENTATIVE", source="SYNTHETIC",
                     mcc=mcc_by_category.get(category),
                 ))
-        rent = datetime(2026, 1, 1)
         for month in range(self.months):
-            rent_month = rent.replace(month=min(rent.month + month, 12),
-                                      year=rent.year + ((rent.month + month - 1) // 12))
+            rent_month_index = start.year * 12 + start.month - 1 + month
+            rent_date = date(
+                rent_month_index // 12,
+                rent_month_index % 12 + 1,
+                1,
+            )
+            if rent_date > end_day:
+                continue
+            rent_month = datetime.combine(rent_date, datetime.min.time())
             rows.append(Transaction(
                 id=None, timestamp=rent_month, amount=650.0,
                 merchant_raw="STUDENT RENT", merchant_clean="Rent",
