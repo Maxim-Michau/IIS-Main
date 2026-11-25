@@ -70,6 +70,17 @@ insights_table = Table(
     Column("estimated_monthly_saving", Float, nullable=False),
     Column("status", String, nullable=False),
 )
+activity_log_table = Table(
+    "activity_log", metadata,
+    Column("id", Integer, primary_key=True),
+    Column("transaction_id", Integer, nullable=False),
+    Column("event_type", String, nullable=False),
+    Column("message", Text, nullable=False),
+    Column("method", String),
+    Column("confidence", Float),
+    Column("explanation", Text),
+    Column("created_at", DateTime, nullable=False),
+)
 
 
 def create_database(database_url: str = DATABASE_URL) -> object:

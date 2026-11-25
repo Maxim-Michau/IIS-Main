@@ -1,5 +1,6 @@
 """Application facade used by the Streamlit UI."""
 
+from datetime import datetime
 from typing import Iterable
 from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Transaction
@@ -7,7 +8,10 @@ from expense_ai.storage.repository import TransactionRepository
 from expense_ai.ai.pipeline import CategorisationPipeline
 from sqlalchemy import select, delete, insert
 from sqlalchemy.orm import Session
-from expense_ai.storage.database import questions_table, budgets_table, insights_table
+from expense_ai.storage.database import (
+    activity_log_table, questions_table, budgets_table, insights_table,
+    transactions_table,
+)
 
 
 class AppService:
@@ -39,7 +43,7 @@ class AppService:
 
     def ingest(self, transaction: Transaction) -> Transaction:
         """Categorise, clarify and persist one transaction."""
-        prediction = self.pipeline.categorise(transaction)
+        prediction, options = self.pipeline.categorise_with_options(transaction)
         transaction.category = prediction.category
         transaction.confidence_score = prediction.confidence_score
         transaction.explanation = prediction.explanation
@@ -47,11 +51,20 @@ class AppService:
         transaction.true_category = None
         saved = self.repository.add(transaction)
         clarification = self.clarification
-        clarification.decide(saved, prediction)
+        clarification.decide(saved, prediction, options)
         clarification.location_question(saved)
         clarification.extra_info_question(saved)
         clarification.recurring_question(saved)
-        return self.repository.update(saved)
+        saved = self.repository.update(saved)
+        self.log_activity(
+            saved.id,
+            "AI_DECISION",
+            f"Categorised {saved.merchant_clean} as {saved.category}.",
+            method=saved.method,
+            confidence=saved.confidence_score,
+            explanation=saved.explanation,
+        )
+        return saved
 
     def ingest_all(self, transactions: Iterable[Transaction]) -> list[Transaction]:
         """Ingest a collection of transactions."""
@@ -106,26 +119,117 @@ class AppService:
             )).mappings().all()
         return [dict(row) for row in rows]
 
-    def answer_question(self, question_id: int, answer: str) -> None:
-        """Answer a pending clarification question."""
+    def answer_question(self, question_id: int, answer: str) -> str | None:
+        """Apply one answer to all pending questions of that type for the merchant."""
         from expense_ai.ai.feedback import FeedbackLearner
-        from expense_ai.storage.database import questions_table
+        from sqlalchemy import select
         with Session(self.repository.engine) as session:
             question = session.execute(
                 select(questions_table).where(questions_table.c.id == question_id)
             ).mappings().first()
-        transaction = (
-            self.repository.get(question["transaction_id"])
-            if question and question["question_type"] == "CATEGORY"
-            else None
-        )
+            if question is None:
+                return None
+            transaction_row = session.execute(
+                select(transactions_table).where(
+                    transactions_table.c.id == question["transaction_id"]
+                )
+            ).mappings().first()
+            if transaction_row is None:
+                return None
+            merchant_questions = session.execute(
+                select(questions_table.c.id, questions_table.c.transaction_id)
+                .join(
+                    transactions_table,
+                    questions_table.c.transaction_id == transactions_table.c.id,
+                )
+                .where(
+                    questions_table.c.question_type == question["question_type"],
+                    questions_table.c.status == "PENDING",
+                    transactions_table.c.merchant_clean == transaction_row["merchant_clean"],
+                )
+            ).all()
+        transaction = self.repository.get(question["transaction_id"])
+        if transaction is None:
+            return None
+        transactions = [
+            item for _, transaction_id in merchant_questions
+            if (item := self.repository.get(transaction_id)) is not None
+        ]
+        question_ids = [question_id for question_id, _ in merchant_questions]
         predicted = transaction.category if transaction else "Other"
-        self.clarification.answer_question(question_id, answer)
-        if transaction:
-            FeedbackLearner(self.repository.engine).record_answer(
+        promoted = False
+        for pending_question_id in question_ids:
+            self.clarification.answer_question(pending_question_id, answer)
+        if question["question_type"] == "CATEGORY" and transaction:
+            promoted = FeedbackLearner(self.repository.engine).record_answer(
                 transaction, predicted, answer
             )
             self.repository.update(transaction)
+        count = len(transactions)
+        merchant = transaction.merchant_clean if transaction else "Merchant"
+        question_type = question["question_type"]
+        if question_type == "CATEGORY":
+            message = (
+                f"Learned: {merchant} = {answer}. {count - 1} more {merchant} "
+                "payments updated."
+                if promoted
+                else f"Set {merchant} to {answer} for {count} transactions."
+            )
+        elif question_type == "LOCATION":
+            message = f"{merchant} location set to {answer} for {count} transactions."
+        elif question_type == "RECURRING":
+            message = f"{merchant} recurring status set to {answer} for {count} transactions."
+        else:
+            message = f"Saved a note for {merchant} on {count} transactions."
+        for item in transactions:
+            self.log_activity(
+                item.id,
+                "ANSWER",
+                message,
+                method=item.method,
+                confidence=item.confidence_score,
+                explanation=item.explanation,
+            )
+        return message
+
+    def log_activity(
+        self,
+        transaction_id: int | None,
+        event_type: str,
+        message: str,
+        method: str | None = None,
+        confidence: float | None = None,
+        explanation: str | None = None,
+    ) -> None:
+        """Persist a user-visible AI decision or data change."""
+        if transaction_id is None:
+            return
+        with Session(self.repository.engine) as session:
+            session.execute(activity_log_table.insert().values(
+                transaction_id=transaction_id,
+                event_type=event_type,
+                message=message,
+                method=method,
+                confidence=confidence,
+                explanation=explanation,
+                created_at=datetime.now(),
+            ))
+            session.commit()
+
+    def get_activity_log(
+        self, transaction_id: int | None = None, limit: int = 100
+    ) -> list[dict[str, object]]:
+        """Return recent activity, optionally for one transaction."""
+        statement = select(activity_log_table).order_by(
+            activity_log_table.c.created_at.desc()
+        )
+        if transaction_id is not None:
+            statement = statement.where(
+                activity_log_table.c.transaction_id == transaction_id
+            )
+        with Session(self.repository.engine) as session:
+            rows = session.execute(statement.limit(limit)).mappings().all()
+        return [dict(row) for row in rows]
 
     def train_ml_if_ready(self) -> bool:
         """Train the service ML categoriser once enough labelled rows exist."""

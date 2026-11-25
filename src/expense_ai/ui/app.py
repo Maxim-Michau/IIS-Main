@@ -29,9 +29,13 @@ service = get_service()
 pending = service.get_pending_questions()
 st.sidebar.title("expense-ai")
 st.sidebar.caption("Simulated student finance assistant")
-st.sidebar.radio("Navigation", ["Dashboard", "Inbox", "Transactions", "Advisor", "Budgets", "Settings"],
-                 index=0, format_func=lambda name: f"Inbox ({len(pending)})" if name == "Inbox" else name,
-                 key="expense_ai_view")
+st.sidebar.markdown(f"**Inbox · {len(pending)} pending**")
+st.sidebar.radio(
+    "Navigation",
+    ["Dashboard", "Inbox", "Transactions", "Advisor", "Budgets", "Settings"],
+    index=0,
+    key="expense_ai_view",
+)
 
 transactions = service.get_transactions()
 if not transactions:

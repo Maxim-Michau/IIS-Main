@@ -63,25 +63,49 @@ class ClarificationEngine:
 
     def location_question(self, transaction: Transaction) -> None:
         """Create a location question for missing or unusual locations."""
-        if transaction.location is None:
-            self._create_question(transaction, "LOCATION",
-                                  f"Where was this £{transaction.amount:.2f} payment?",
-                                  ["Birmingham", "Manchester", "Another location"])
-        elif transaction.location not in ("Birmingham", "Coventry", "Solihull"):
-            self._create_question(transaction, "LOCATION",
-                                  f"You spent £{transaction.amount:.2f} in {transaction.location}. Were you travelling?",
-                                  ["Yes", "No"])
+        if transaction.location is None or transaction.location not in (
+            "Birmingham", "Coventry", "Solihull"
+        ):
+            self._create_question(
+                transaction, "LOCATION",
+                f"Where should I record the location for {transaction.merchant_clean}?",
+                [],
+            )
 
     def recurring_question(self, transaction: Transaction) -> None:
-        """Ask whether a merchant repeat is a recurring payment."""
+        """Ask once per merchant only when the observed payment pattern is borderline."""
+        from expense_ai.ai.categorisers.recurrence import RecurrenceDetector
+
         with Session(self.engine) as session:
             rows = session.execute(select(transactions_table).where(
                 transactions_table.c.merchant_clean == transaction.merchant_clean
             )).mappings().all()
-        if len(rows) >= 2:
+            existing_question = session.execute(
+                select(questions_table.c.id)
+                .join(
+                    transactions_table,
+                    questions_table.c.transaction_id == transactions_table.c.id,
+                )
+                .where(
+                    transactions_table.c.merchant_clean == transaction.merchant_clean,
+                    questions_table.c.question_type == "RECURRING",
+                )
+            ).first()
+        result = RecurrenceDetector(self.engine).detect(transaction)
+        if result.borderline and not existing_question:
+            amounts = [float(row["amount"]) for row in rows]
+            low, high = min(amounts), max(amounts)
+            days = {"weekly": 7, "fortnightly": 14, "monthly": 30}[result.interval]
+            wording = {
+                "weekly": "regular weekly payment",
+                "fortnightly": "regular fortnightly payment",
+                "monthly": "regular monthly payment",
+            }[result.interval]
             self._create_question(
                 transaction, "RECURRING",
-                f"You have paid {transaction.merchant_clean} repeatedly. Is it recurring?",
+                f"I noticed {result.count} {transaction.merchant_clean} payments of "
+                f"GBP {low:.0f}-{high:.0f}, roughly every {days} days. "
+                f"Should I treat this as a {wording}?",
                 ["Yes", "No"],
             )
 

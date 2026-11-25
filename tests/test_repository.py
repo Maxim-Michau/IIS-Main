@@ -6,7 +6,7 @@ from expense_ai.storage.repository import TransactionRepository
 from expense_ai.services.app_service import AppService
 from expense_ai.ai.pipeline import CategorisationPipeline
 from expense_ai.ai.categorisers.rule import RuleCategoriser
-from expense_ai.storage.database import feedback_table, questions_table
+from expense_ai.storage.database import activity_log_table, feedback_table, questions_table
 from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
@@ -118,3 +118,37 @@ def test_yes_no_answer_does_not_become_a_category(engine) -> None:
     assert updated.is_recurring is True
     with Session(engine) as session:
         assert session.execute(select(feedback_table)).all() == []
+
+
+def test_merchant_answer_updates_pending_transactions_and_logs_once(engine) -> None:
+    """A merchant answer updates all its pending rows but records feedback once."""
+    service = AppService(engine, CategorisationPipeline([RuleCategoriser()]))
+    transaction_ids = []
+    question_ids = []
+    for day in (1, 2, 3):
+        transaction = service.repository.add(Transaction(
+            None, datetime(2026, 11, day), 9.0, "GREGGS", "Greggs", "Birmingham",
+            category="Other", status="TENTATIVE",
+        ))
+        transaction_ids.append(transaction.id)
+        with Session(engine) as session:
+            question_id = session.execute(insert(questions_table).values(
+                transaction_id=transaction.id,
+                question_type="CATEGORY",
+                prompt_text="Category?",
+                options="Eating Out|Takeaways",
+                status="PENDING",
+            )).inserted_primary_key[0]
+            session.commit()
+        question_ids.append(question_id)
+
+    message = service.answer_question(question_ids[0], "Eating Out")
+
+    assert message == "Set Greggs to Eating Out for 3 transactions."
+    assert all(
+        service.repository.get(transaction_id).category == "Eating Out"
+        for transaction_id in transaction_ids
+    )
+    with Session(engine) as session:
+        assert len(session.execute(select(feedback_table)).all()) == 1
+        assert len(session.execute(select(activity_log_table)).all()) == 3

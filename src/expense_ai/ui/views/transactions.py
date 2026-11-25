@@ -16,6 +16,19 @@ def render(service: object) -> None:
     if search:
         frame = frame[frame["merchant_raw"].str.contains(search, case=False, na=False)]
     st.dataframe(frame, use_container_width=True)
+    st.subheader("Activity log")
+    activity = service.get_activity_log(limit=30)
+    if activity:
+        activity_frame = pd.DataFrame(activity)
+        st.dataframe(
+            activity_frame[
+                ["created_at", "event_type", "transaction_id", "message", "method", "confidence"]
+            ],
+            use_container_width=True,
+        )
+    else:
+        st.info("No AI decisions or answers have been recorded yet.")
+
     st.subheader("Correct categorisation")
     selected = st.selectbox("Transaction", [f"{item.id}: {item.merchant_clean} (£{item.amount:.2f})"
                                              for item in transactions],
@@ -31,12 +44,34 @@ def render(service: object) -> None:
             transaction.category = category
             transaction.status = "CORRECTED"
             service.repository.update(transaction)
+            service.log_activity(
+                transaction.id,
+                "MANUAL_CORRECTION",
+                f"Changed {transaction.merchant_clean} from {previous} to {category}.",
+                transaction.method,
+                transaction.confidence_score,
+                transaction.explanation,
+            )
             st.success(f"Changed {transaction.merchant_clean} to {category}")
         if col2.button("Undo", key=f"undo-{transaction_id}"):
             transaction.status = "TENTATIVE"
             service.repository.update(transaction)
+            service.log_activity(
+                transaction.id,
+                "UNDO",
+                f"Reset {transaction.merchant_clean} to tentative status.",
+                transaction.method,
+                transaction.confidence_score,
+                transaction.explanation,
+            )
             st.info("Correction undone")
         with st.expander("Why this category?"):
             st.write(f"Method: {transaction.method or 'RULE'}")
             st.write(f"Confidence: {transaction.confidence_score:.0%}")
             st.write(transaction.explanation or "No explanation was recorded.")
+    with st.expander(f"History for transaction {transaction_id}"):
+        history = service.get_activity_log(transaction_id=transaction_id)
+        if history:
+            st.dataframe(pd.DataFrame(history), use_container_width=True)
+        else:
+            st.info("No history is recorded for this transaction.")
