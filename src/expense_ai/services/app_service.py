@@ -133,7 +133,10 @@ class AppService:
         from sqlalchemy import select
         with Session(self.repository.engine) as session:
             question = session.execute(
-                select(questions_table).where(questions_table.c.id == question_id)
+                select(questions_table).where(
+                    questions_table.c.id == question_id,
+                    questions_table.c.status == "PENDING",
+                )
             ).mappings().first()
             if question is None:
                 return None

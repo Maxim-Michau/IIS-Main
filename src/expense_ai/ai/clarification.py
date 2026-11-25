@@ -1,6 +1,7 @@
 """Mixed-initiative clarification decisions."""
 
 from datetime import datetime
+from typing import Callable
 from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
@@ -15,12 +16,14 @@ class ClarificationEngine:
 
     def __init__(self, engine: Engine, auto_threshold: float = AUTO_ACCEPT_THRESHOLD,
                  ask_threshold: float = ASK_THRESHOLD,
-                 max_questions_per_day: int = MAX_QUESTIONS_PER_DAY) -> None:
+                 max_questions_per_day: int = MAX_QUESTIONS_PER_DAY,
+                 clock: Callable[[], datetime] | None = None) -> None:
         """Configure thresholds and interruption limit."""
         self.engine = engine
         self.auto_threshold = auto_threshold
         self.ask_threshold = ask_threshold
         self.max_questions_per_day = max_questions_per_day
+        self.clock = clock or datetime.now
 
     def decide(self, transaction: Transaction, prediction: Prediction,
                options: list[str] | None = None) -> str:
@@ -118,16 +121,26 @@ class ClarificationEngine:
 
     def daily_pending_count(self) -> int:
         """Count pending questions for today."""
-        today = datetime.now().date()
+        today = self.clock().date()
         with Session(self.engine) as session:
             rows = session.execute(select(questions_table)).mappings().all()
         return sum(1 for row in rows if row["status"] == "PENDING"
                    and getattr(row["created_at"], "date", lambda: today)() == today)
 
+    def daily_question_count(self) -> int:
+        """Count all questions created today, including already answered ones."""
+        today = self.clock().date()
+        with Session(self.engine) as session:
+            rows = session.execute(select(questions_table)).mappings().all()
+        return sum(
+            1 for row in rows
+            if row["created_at"] is not None and row["created_at"].date() == today
+        )
+
     def _create_question(self, transaction: Transaction, question_type: str,
                          prompt: str, options: list[str]) -> None:
         """Persist a question unless the daily cap is reached or it is duplicate."""
-        if self.daily_pending_count() >= self.max_questions_per_day:
+        if self.daily_question_count() >= self.max_questions_per_day:
             return
         with Session(self.engine) as session:
             duplicate = session.execute(select(questions_table).where(
@@ -147,7 +160,7 @@ class ClarificationEngine:
             session.execute(insert(questions_table).values(
                 transaction_id=transaction.id, question_type=question_type,
                 prompt_text=prompt, options="|".join(options), status="PENDING",
-                created_at=datetime.now(),
+                created_at=self.clock(),
             ))
             session.commit()
 
@@ -159,7 +172,7 @@ class ClarificationEngine:
             ).mappings().first()
             session.execute(update(questions_table).where(
                 questions_table.c.id == question_id
-            ).values(status="ANSWERED", answer=answer, answered_at=datetime.now()))
+            ).values(status="ANSWERED", answer=answer, answered_at=self.clock()))
             if row:
                 transaction_row = session.execute(
                     select(transactions_table).where(

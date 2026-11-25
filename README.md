@@ -2,13 +2,12 @@
 
 An offline-first personal-finance assistant for a UK university student, built with Python, Streamlit, SQLite and scikit-learn.
 
-**README prose word count: 267 words**
-
 ## Status
 
-- **Implemented:** package installation, SQLite storage, synthetic ingestion through the categorisation and clarification pipeline, rule categorisation, Streamlit routing, chat advisor, monthly budgets, insight cards, live settings, feedback storage, and evaluation scripts. The full pytest suite and scripts were run.
-- **Limited:** calibrated ML training exists and activates from confirmed/corrected or high-confidence rule labels, but no separate retrained-model smoke run was completed.
-- **Simulated:** push notifications and the scripted feedback workflow; app transaction simulation creates a fresh local batch.
+- **Implemented:** SQLite storage, synthetic ingestion, RULE/LEARNED/FUZZY/CONTEXT categorisation, optional ML/LLM methods, grouped clarification, activity history, monthly budgets, advisor charts, and measured evaluation.
+- **Validated in this session:** `python -m pytest -v` on Linux passed 37 tests; `python scripts/evaluate.py` produced the results in `docs/evaluation_results.md`. Streamlit view smoke tests ran as part of pytest. Windows and macOS were not run in this session.
+- **Limited:** Open Banking is not implemented. Optional LLM operation and a manual interactive Streamlit session were not run.
+- **Simulated:** MCC values are synthetic bank-field examples; push notifications and scripted feedback are simulated.
 - **Planned:** `OpenBankingSource` is not implemented. No live bank connection is claimed.
 
 ## Run on Windows (PowerShell)
@@ -43,15 +42,13 @@ Copy `.env.example` to `.env`, set `USE_LLM=true`, and set `ANTHROPIC_API_KEY` t
 
 ## Development record
 
-1. Fixed editable package imports and pytest discovery.
-2. Replaced standalone page scripts with routed Streamlit views.
-3. Added calibration, clarification, feedback, insight and grounded-advisor behavior.
-4. Replaced placeholder evaluation with measured synthetic-data scripts and results.
-5. Cleaned README status and run instructions.
+1. Added type-aware answers, learned merchant rules, and multiple categorisation signals.
+2. Grouped Inbox questions by merchant and persisted an activity history.
+3. Added data-backed budgets, monthly charts, and an evaluation with a real daily question cap.
 
 ## Measured evaluation
 
-See `docs/evaluation_results.md`. It contains only figures printed by the repository scripts.
+See `docs/evaluation_results.md` for measured synthetic evaluation results.
 
 ## AI assistance
 
