@@ -8,7 +8,7 @@ from expense_ai.sources.bank_source import BankSource
 
 
 class SyntheticBankSource(BankSource):
-    """Generate realistic Birmingham student transactions."""
+    """Generate realistic Birmingham transactions with simulated bank MCC fields."""
 
     def __init__(self, seed: int = 2026, months: int = 6) -> None:
         """Initialise reproducible data parameters."""
@@ -45,6 +45,13 @@ class SyntheticBankSource(BankSource):
             ("CARD PAYMENT CAFE 77", "Unknown Cafe", "Eating Out", 8.5),
         ]
         rows: list[Transaction] = []
+        # MCC values below are simulated bank fields, not observed bank data.
+        mcc_by_category = {
+            "Groceries": "5411", "Eating Out": "5812", "Takeaways": "5814",
+            "Transport": "4111", "Rent & Bills": "4900", "Subscriptions": "5816",
+            "Shopping": "5941", "Entertainment": "5812", "Education": "5942",
+            "Health & Fitness": "7997",
+        }
         for day in range(self.months * 30):
             current = start + timedelta(days=day)
             count = 3 if day % 3 else 5
@@ -61,6 +68,7 @@ class SyntheticBankSource(BankSource):
                     amount=amount, merchant_raw=merchant_raw, merchant_clean=merchant_clean,
                     location=location, category="Other", true_category=category,
                     confidence_score=0.0, status="TENTATIVE", source="SYNTHETIC",
+                    mcc=mcc_by_category.get(category),
                 ))
         rent = datetime(2026, 1, 1)
         for month in range(self.months):
@@ -72,5 +80,6 @@ class SyntheticBankSource(BankSource):
                 location="Birmingham", category="Other", confidence_score=0.0,
                 status="TENTATIVE", explanation="", source="SYNTHETIC",
                 true_category="Rent & Bills", method="RULE",
+                mcc=mcc_by_category["Rent & Bills"],
             ))
         return rows

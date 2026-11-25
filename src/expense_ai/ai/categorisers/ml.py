@@ -2,8 +2,10 @@
 
 from pathlib import Path
 from typing import Sequence
+import warnings
 import joblib
 from scipy import sparse
+from scipy.optimize import OptimizeWarning
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import FeatureUnion
@@ -11,6 +13,12 @@ from sklearn.calibration import CalibratedClassifierCV
 from expense_ai.models.transaction import Prediction, Transaction
 from expense_ai.ai.categorisers.base import Categoriser
 from config.settings import MODEL_PATH
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Unknown solver options: iprint",
+    category=OptimizeWarning,
+)
 
 
 class MLCategoriser(Categoriser):

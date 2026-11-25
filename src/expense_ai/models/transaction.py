@@ -24,6 +24,7 @@ class Transaction:
     method: str = "RULE"
     is_recurring: bool = False
     note: Optional[str] = None
+    mcc: Optional[str] = None
 
 
 @dataclass

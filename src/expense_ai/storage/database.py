@@ -24,6 +24,7 @@ transactions_table = Table(
     Column("method", String, nullable=False),
     Column("is_recurring", Boolean, nullable=False, default=False),
     Column("note", Text),
+    Column("mcc", String),
 )
 questions_table = Table(
     "questions", metadata,
@@ -103,5 +104,9 @@ def create_database(database_url: str = DATABASE_URL) -> object:
             if "note" not in columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE transactions ADD COLUMN note TEXT"
+                )
+            if "mcc" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE transactions ADD COLUMN mcc TEXT"
                 )
     return engine

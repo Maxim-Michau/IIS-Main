@@ -20,8 +20,14 @@ class AppService:
         from expense_ai.ai.clarification import ClarificationEngine
         self.clarification = ClarificationEngine(engine)
         from expense_ai.ai.categorisers.rule import RuleCategoriser
+        from expense_ai.ai.categorisers.context import ContextCategoriser
+        from expense_ai.ai.categorisers.fuzzy import FuzzyMerchantCategoriser
+        from expense_ai.ai.categorisers.recurrence import RecurrenceDetector
         for categoriser in self.pipeline.categorisers:
-            if isinstance(categoriser, RuleCategoriser):
+            if isinstance(categoriser, (
+                RuleCategoriser, ContextCategoriser, FuzzyMerchantCategoriser,
+                RecurrenceDetector,
+            )):
                 categoriser.engine = engine
 
     def configure_clarification(self, auto_threshold: float, ask_threshold: float,

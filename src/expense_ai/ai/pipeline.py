@@ -12,11 +12,29 @@ class CategorisationPipeline:
         self.categorisers = categorisers
 
     def categorise(self, transaction: Transaction) -> Prediction:
-        """Stop after a high-confidence rule match; otherwise choose the highest score."""
+        """Compare all methods and flag strong disagreements for clarification."""
         predictions: list[Prediction] = []
         for categoriser in self.categorisers:
-            prediction = categoriser.categorise(transaction)
-            predictions.append(prediction)
-            if prediction.method == "RULE" and prediction.confidence_score >= 0.85:
-                return prediction
-        return max(predictions, key=lambda prediction: prediction.confidence_score)
+            predictions.append(categoriser.categorise(transaction))
+        if not predictions:
+            return Prediction("Other", 0.20, "No categorisers are configured.", "CONTEXT")
+        best = max(predictions, key=lambda prediction: prediction.confidence_score)
+        strong = [
+            prediction for prediction in predictions
+            if prediction.confidence_score >= 0.75
+        ]
+        alternatives = {
+            prediction.category: prediction
+            for prediction in strong
+            if prediction.category != best.category
+        }
+        if alternatives:
+            conflict = max(alternatives.values(), key=lambda item: item.confidence_score)
+            return Prediction(
+                best.category,
+                min(best.confidence_score, 0.49),
+                f"Strong methods disagree: {best.method} predicts {best.category}, "
+                f"while {conflict.method} predicts {conflict.category}.",
+                best.method,
+            )
+        return best
