@@ -7,31 +7,29 @@ def render(service: object) -> None:
     """Configure budgets and demonstration controls."""
     st.header("Budgets")
     transactions = service.get_transactions()
-    selected_month = st.date_input("Budget month", value=None)
-    month = selected_month.strftime("%Y-%m") if selected_month else None
-    if month is None:
-        from datetime import datetime
-        month = datetime.now().strftime("%Y-%m")
-    categories = ["Groceries", "Eating Out", "Takeaways", "Transport", "Rent & Bills",
-                  "Subscriptions", "Shopping", "Entertainment", "Education",
-                  "Health & Fitness", "Travel", "Other"]
-    if transactions:
-        import pandas as pd
-        frame = pd.DataFrame([vars(item) for item in transactions])
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"])
-        monthly = frame[frame["timestamp"].dt.strftime("%Y-%m") == month]
-        totals = monthly.groupby("category")["amount"].sum()
-        budgets = service.get_budgets(month)
-        for category, limit in budgets.items():
-            spent = float(totals.get(category, 0.0))
-            ratio = spent / limit if limit else 0.0
-            st.write(f"{category}: £{spent:.2f} of £{limit:.2f}")
-            st.progress(min(1.0, ratio), text=f"{ratio:.0%} used")
-    category = st.selectbox("Category", categories)
-    limit = st.number_input("Monthly budget (£)", min_value=0.0, value=100.0)
+    from expense_ai.ui.month_selector import render_budget_progress, select_data_month
+    month = select_data_month(transactions, "Month to view")
+    default_categories = [
+        "Groceries", "Eating Out", "Takeaways", "Transport", "Rent & Bills",
+        "Subscriptions", "Shopping", "Entertainment", "Education",
+        "Health & Fitness", "Travel", "Other",
+    ]
+    categories = sorted(set(default_categories) | {item.category for item in transactions})
+    budgets = service.get_budgets(month)
+    render_budget_progress(transactions, budgets, month)
+
+    st.subheader("Add or update a budget")
+    category = st.selectbox("Category", categories, key="budget_category")
+    limit = st.number_input("Monthly budget (GBP)", min_value=0.0, value=100.0)
+    period_options = ["Every month"]
+    if month != "default":
+        period_options.append("Specific month")
+    period = st.radio("Budget applies", period_options, horizontal=True)
+    budget_month = "default" if period == "Every month" else month
     if st.button("Save budget"):
-        service.save_budget(category, float(limit), month)
-        st.success(f"Saved £{limit:.2f} for {category}")
+        service.save_budget(category, float(limit), budget_month)
+        applied = "every month" if budget_month == "default" else budget_month
+        st.success(f"Saved GBP {limit:.2f} for {category} ({applied}).")
 
     st.subheader("Insights")
     from expense_ai.insights.insight_engine import InsightEngine

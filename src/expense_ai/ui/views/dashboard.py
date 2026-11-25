@@ -1,7 +1,5 @@
 """Dashboard Streamlit view."""
 
-from datetime import datetime
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -14,6 +12,8 @@ def render(service: object) -> None:
     if not transactions:
         st.info("No transactions yet.")
         return
+    from expense_ai.ui.month_selector import render_budget_progress, select_data_month
+    budget_month = select_data_month(transactions, "Budget month")
     frame = pd.DataFrame([vars(transaction) for transaction in transactions])
     frame["timestamp"] = pd.to_datetime(frame["timestamp"])
     col1, col2 = st.columns(2)
@@ -49,12 +49,6 @@ def render(service: object) -> None:
     right.plotly_chart(px.bar(locations, x="location", y="amount", title="Spending by location"),
                        use_container_width=True)
     st.subheader("Budget progress")
-    year, month_number = frame["timestamp"].max().year, frame["timestamp"].max().month
-    month = f"{year:04d}-{month_number:02d}"
-    budgets = service.get_budgets(month)
-    from expense_ai.insights.insight_engine import InsightEngine
-    warnings = InsightEngine(budgets).budget_warnings(
-        transactions, year, month_number
+    render_budget_progress(
+        transactions, service.get_budgets(budget_month), budget_month
     )
-    for warning in warnings:
-        st.warning(warning)

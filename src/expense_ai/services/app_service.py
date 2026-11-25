@@ -104,12 +104,20 @@ class AppService:
             session.commit()
 
     def get_budgets(self, month: str) -> dict[str, float]:
-        """Return budgets configured for a calendar month."""
+        """Return recurring defaults overridden by budgets for the requested month."""
         with Session(self.repository.engine) as session:
             rows = session.execute(select(budgets_table).where(
-                budgets_table.c.month == month
+                budgets_table.c.month.in_(("default", month))
             )).mappings().all()
-        return {row["category"]: float(row["monthly_limit"]) for row in rows}
+        budgets = {
+            row["category"]: float(row["monthly_limit"])
+            for row in rows if row["month"] == "default"
+        }
+        budgets.update({
+            row["category"]: float(row["monthly_limit"])
+            for row in rows if row["month"] == month
+        })
+        return budgets
 
     def get_pending_insights(self) -> list[dict[str, object]]:
         """Return insight cards awaiting Accept or Dismiss."""
