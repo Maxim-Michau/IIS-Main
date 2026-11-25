@@ -19,6 +19,10 @@ class AppService:
         self.pipeline = pipeline
         from expense_ai.ai.clarification import ClarificationEngine
         self.clarification = ClarificationEngine(engine)
+        from expense_ai.ai.categorisers.rule import RuleCategoriser
+        for categoriser in self.pipeline.categorisers:
+            if isinstance(categoriser, RuleCategoriser):
+                categoriser.engine = engine
 
     def configure_clarification(self, auto_threshold: float, ask_threshold: float,
                                 max_questions_per_day: int) -> None:
@@ -98,21 +102,19 @@ class AppService:
 
     def answer_question(self, question_id: int, answer: str) -> None:
         """Answer a pending clarification question."""
-        from expense_ai.ai.clarification import ClarificationEngine
         from expense_ai.ai.feedback import FeedbackLearner
-        from sqlalchemy import select
-        from sqlalchemy.orm import Session
         from expense_ai.storage.database import questions_table
         with Session(self.repository.engine) as session:
             question = session.execute(
                 select(questions_table).where(questions_table.c.id == question_id)
             ).mappings().first()
-        transaction = None
-        predicted = "Other"
-        if question:
-            transaction = self.repository.get(question["transaction_id"])
-            predicted = transaction.category if transaction else "Other"
-        ClarificationEngine(self.repository.engine).answer_question(question_id, answer)
+        transaction = (
+            self.repository.get(question["transaction_id"])
+            if question and question["question_type"] == "CATEGORY"
+            else None
+        )
+        predicted = transaction.category if transaction else "Other"
+        self.clarification.answer_question(question_id, answer)
         if transaction:
             FeedbackLearner(self.repository.engine).record_answer(
                 transaction, predicted, answer

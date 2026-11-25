@@ -1,6 +1,7 @@
 """SQLAlchemy database setup."""
 
-from sqlalchemy import Column, Float, Integer, MetaData, String, Table, DateTime, Text, create_engine
+from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
+                        DateTime, Text, create_engine)
 from sqlalchemy.orm import registry
 from config.settings import DATABASE_PATH, DATABASE_URL
 
@@ -21,6 +22,8 @@ transactions_table = Table(
     Column("source", String, nullable=False),
     Column("true_category", String),
     Column("method", String, nullable=False),
+    Column("is_recurring", Boolean, nullable=False, default=False),
+    Column("note", Text),
 )
 questions_table = Table(
     "questions", metadata,
@@ -86,4 +89,19 @@ def create_database(database_url: str = DATABASE_URL) -> object:
                     )
             except Exception:
                 pass
+    if engine.dialect.name == "sqlite":
+        with engine.begin() as connection:
+            columns = {
+                row[1] for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(transactions)"
+                ).fetchall()
+            }
+            if "is_recurring" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE transactions ADD COLUMN is_recurring BOOLEAN NOT NULL DEFAULT 0"
+                )
+            if "note" not in columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE transactions ADD COLUMN note TEXT"
+                )
     return engine

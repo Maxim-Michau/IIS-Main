@@ -22,6 +22,8 @@ class Transaction:
     source: str = "SYNTHETIC"
     true_category: Optional[str] = None
     method: str = "RULE"
+    is_recurring: bool = False
+    note: Optional[str] = None
 
 
 @dataclass

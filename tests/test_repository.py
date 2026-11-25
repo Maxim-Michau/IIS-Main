@@ -6,8 +6,8 @@ from expense_ai.storage.repository import TransactionRepository
 from expense_ai.services.app_service import AppService
 from expense_ai.ai.pipeline import CategorisationPipeline
 from expense_ai.ai.categorisers.rule import RuleCategoriser
-from expense_ai.storage.database import feedback_table
-from sqlalchemy import select
+from expense_ai.storage.database import feedback_table, questions_table
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 
@@ -66,3 +66,55 @@ def test_ingest_batch_creates_answerable_questions(engine) -> None:
         and item["question_type"] == "CATEGORY"
     ]
     assert repeat_questions == []
+
+
+def test_location_answer_preserves_category_and_updates_location(engine) -> None:
+    """Location answers update location without corrupting the category."""
+    service = AppService(engine, CategorisationPipeline([RuleCategoriser()]))
+    transaction = service.repository.add(Transaction(
+        None, datetime.now(), 12.0, "Greggs", "Greggs", "Unknown",
+        category="Eating Out", status="TENTATIVE",
+    ))
+    with Session(engine) as session:
+        question_id = session.execute(insert(questions_table).values(
+            transaction_id=transaction.id,
+            question_type="LOCATION",
+            prompt_text="Where?",
+            options="",
+            status="PENDING",
+        )).inserted_primary_key[0]
+        session.commit()
+
+    service.answer_question(question_id, "Birmingham")
+
+    updated = service.repository.get(transaction.id)
+    assert updated.category == "Eating Out"
+    assert updated.location == "Birmingham"
+    with Session(engine) as session:
+        assert session.execute(select(feedback_table)).all() == []
+
+
+def test_yes_no_answer_does_not_become_a_category(engine) -> None:
+    """Recurring answers are stored as flags and never become category feedback."""
+    service = AppService(engine, CategorisationPipeline([RuleCategoriser()]))
+    transaction = service.repository.add(Transaction(
+        None, datetime.now(), 12.0, "Netflix", "Netflix", "Birmingham",
+        category="Subscriptions",
+    ))
+    with Session(engine) as session:
+        question_id = session.execute(insert(questions_table).values(
+            transaction_id=transaction.id,
+            question_type="RECURRING",
+            prompt_text="Recurring?",
+            options="Yes|No",
+            status="PENDING",
+        )).inserted_primary_key[0]
+        session.commit()
+
+    service.answer_question(question_id, "Yes")
+
+    updated = service.repository.get(transaction.id)
+    assert updated.category == "Subscriptions"
+    assert updated.is_recurring is True
+    with Session(engine) as session:
+        assert session.execute(select(feedback_table)).all() == []

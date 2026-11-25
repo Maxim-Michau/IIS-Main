@@ -4,6 +4,7 @@ from datetime import datetime
 from expense_ai.models.transaction import Transaction
 from expense_ai.ai.categorisers.rule import RuleCategoriser
 from expense_ai.ai.pipeline import CategorisationPipeline
+from expense_ai.ai.feedback import FeedbackLearner
 
 
 def make_transaction(merchant: str) -> Transaction:
@@ -23,3 +24,22 @@ def test_pipeline_stops_on_rule() -> None:
     pipeline = CategorisationPipeline([RuleCategoriser()])
     prediction = pipeline.categorise(make_transaction("NETFLIX.COM"))
     assert prediction.category == "Subscriptions"
+
+
+def test_promoted_rule_changes_next_prediction(engine) -> None:
+    """A promoted merchant label is loaded before the next prediction."""
+    rule = RuleCategoriser(engine=engine)
+    merchant = "Odd Merchant Kiosk"
+    transaction = make_transaction(merchant)
+    assert rule.categorise(transaction).category == "Other"
+    learner = FeedbackLearner(engine, promotion_count=2)
+    transaction.id = 1
+    learner.record_answer(transaction, "Other", "Groceries")
+    transaction.id = 2
+    learner.record_answer(transaction, "Other", "Groceries")
+
+    prediction = rule.categorise(transaction)
+
+    assert prediction.category == "Groceries"
+    assert prediction.method == "LEARNED"
+    assert prediction.explanation == "You labelled this merchant 2 times."

@@ -143,7 +143,24 @@ class ClarificationEngine:
                     )
                 ).mappings().first()
                 if transaction_row:
-                    session.execute(update(transactions_table).where(
-                        transactions_table.c.id == row["transaction_id"]
-                    ).values(category=answer, status="CONFIRMED"))
+                    values: dict[str, object] = {}
+                    question_type = row["question_type"]
+                    if question_type == "CATEGORY":
+                        values.update(
+                            category=answer,
+                            status=("CONFIRMED" if transaction_row["category"] == answer
+                                    else "CORRECTED"),
+                        )
+                    elif question_type == "LOCATION":
+                        values["location"] = answer
+                    elif question_type == "RECURRING":
+                        values["is_recurring"] = answer.strip().casefold() in {
+                            "yes", "y", "true", "1", "recurring",
+                        }
+                    elif question_type == "EXTRA_INFO":
+                        values["note"] = answer
+                    if values:
+                        session.execute(update(transactions_table).where(
+                            transactions_table.c.id == row["transaction_id"]
+                        ).values(**values))
             session.commit()
