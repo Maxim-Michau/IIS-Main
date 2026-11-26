@@ -20,7 +20,7 @@ class FeedbackLearner:
         self.retrain_count = retrain_count
 
     def record_answer(self, transaction: Transaction, predicted_category: str,
-                      chosen_category: str) -> bool:
+                      chosen_category: str, explicit: bool = False) -> bool:
         """Store feedback and promote a merchant rule when confirmed enough times."""
         with Session(self.engine) as session:
             session.execute(insert(feedback_table).values(
@@ -33,29 +33,40 @@ class FeedbackLearner:
             session.commit()
         transaction.category = chosen_category
         transaction.status = "CORRECTED" if predicted_category != chosen_category else "CONFIRMED"
+        if explicit:
+            self._record_explicit_rule(transaction.merchant_clean, chosen_category)
+            return True
         should_promote = self._confirmation_count(transaction.merchant_clean, chosen_category)
         if should_promote >= self.promotion_count:
             self._promote_rule(transaction.merchant_clean, chosen_category)
         return should_promote >= self.promotion_count
 
-    def undo_correction(self, transaction: Transaction, previous_category: str) -> None:
-        """Restore a transaction category after a correction."""
+    def undo_correction(
+        self,
+        transaction: Transaction,
+        previous_category: str,
+        feedback_id: int | None = None,
+        previous_rule: dict[str, object] | None = None,
+    ) -> None:
+        """Remove correction feedback and restore or decrement its learned rule."""
         with Session(self.engine) as session:
-            session.execute(delete(feedback_table).where(
-                feedback_table.c.transaction_id == transaction.id,
-            ))
-            rule = session.execute(select(merchant_rules_table).where(
-                merchant_rules_table.c.pattern == transaction.merchant_clean
-            )).mappings().first()
-            if rule:
-                if rule["times_confirmed"] <= 1:
-                    session.execute(delete(merchant_rules_table).where(
-                        merchant_rules_table.c.pattern == transaction.merchant_clean
-                    ))
-                else:
-                    session.execute(merchant_rules_table.update().where(
-                        merchant_rules_table.c.pattern == transaction.merchant_clean
-                    ).values(times_confirmed=rule["times_confirmed"] - 1))
+            feedback_delete = delete(feedback_table).where(
+                feedback_table.c.id == feedback_id
+            ) if feedback_id is not None else delete(feedback_table).where(
+                feedback_table.c.transaction_id == transaction.id
+            )
+            session.execute(feedback_delete)
+            rule_query = merchant_rules_table.c.pattern == transaction.merchant_clean
+            if previous_rule is None:
+                session.execute(delete(merchant_rules_table).where(
+                    rule_query, merchant_rules_table.c.origin == "LEARNED"
+                ))
+            else:
+                session.execute(merchant_rules_table.update().where(rule_query).values(
+                    category=previous_rule["category"],
+                    origin=previous_rule["origin"],
+                    times_confirmed=previous_rule["times_confirmed"],
+                ))
             session.commit()
         transaction.category = previous_category
         transaction.status = "TENTATIVE"
@@ -101,5 +112,26 @@ class FeedbackLearner:
                 session.execute(insert(merchant_rules_table).values(
                     pattern=merchant, category=category,
                     origin="LEARNED", times_confirmed=self.promotion_count,
+                ))
+            session.commit()
+
+    def _record_explicit_rule(self, merchant: str, category: str) -> None:
+        """Create or increment a learned rule from an explicit user correction."""
+        with Session(self.engine) as session:
+            existing = session.execute(select(merchant_rules_table).where(
+                merchant_rules_table.c.pattern == merchant
+            )).mappings().first()
+            if existing:
+                session.execute(merchant_rules_table.update().where(
+                    merchant_rules_table.c.pattern == merchant
+                ).values(
+                    category=category,
+                    origin="LEARNED",
+                    times_confirmed=existing["times_confirmed"] + 1,
+                ))
+            else:
+                session.execute(insert(merchant_rules_table).values(
+                    pattern=merchant, category=category,
+                    origin="LEARNED", times_confirmed=1,
                 ))
             session.commit()

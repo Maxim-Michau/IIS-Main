@@ -80,6 +80,7 @@ activity_log_table = Table(
     Column("method", String),
     Column("confidence", Float),
     Column("explanation", Text),
+    Column("previous_state", Text),
     Column("created_at", DateTime, nullable=False),
 )
 
@@ -129,5 +130,14 @@ def create_database(database_url: str = DATABASE_URL) -> object:
             if "surfaced_at" not in question_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE questions ADD COLUMN surfaced_at DATETIME"
+                )
+            activity_columns = {
+                row[1] for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(activity_log)"
+                ).fetchall()
+            }
+            if "previous_state" not in activity_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE activity_log ADD COLUMN previous_state TEXT"
                 )
     return engine

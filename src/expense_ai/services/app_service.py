@@ -1,16 +1,17 @@
 """Application facade used by the Streamlit UI."""
 
 from datetime import datetime
+import json
 from typing import Iterable
 from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Transaction
 from expense_ai.storage.repository import TransactionRepository
 from expense_ai.ai.pipeline import CategorisationPipeline
-from sqlalchemy import select, delete, insert
+from sqlalchemy import select, delete, insert, func
 from sqlalchemy.orm import Session
 from expense_ai.storage.database import (
     activity_log_table, questions_table, budgets_table, insights_table,
-    transactions_table,
+    transactions_table, feedback_table, merchant_rules_table,
 )
 
 
@@ -153,8 +154,6 @@ class AppService:
 
     def answer_question(self, question_id: int, answer: str) -> str | None:
         """Apply one answer to all pending questions of that type for the merchant."""
-        from expense_ai.ai.feedback import FeedbackLearner
-        from sqlalchemy import select
         with Session(self.repository.engine) as session:
             question = session.execute(
                 select(questions_table).where(
@@ -171,18 +170,28 @@ class AppService:
             ).mappings().first()
             if transaction_row is None:
                 return None
-            merchant_questions = session.execute(
-                select(questions_table.c.id, questions_table.c.transaction_id)
-                .join(
-                    transactions_table,
-                    questions_table.c.transaction_id == transactions_table.c.id,
-                )
-                .where(
-                    questions_table.c.question_type == question["question_type"],
-                    questions_table.c.status == "PENDING",
-                    transactions_table.c.merchant_clean == transaction_row["merchant_clean"],
-                )
-            ).all()
+            is_category = question["question_type"] == "CATEGORY"
+            if not is_category:
+                merchant_questions = session.execute(
+                    select(questions_table.c.id, questions_table.c.transaction_id)
+                    .join(
+                        transactions_table,
+                        questions_table.c.transaction_id == transactions_table.c.id,
+                    )
+                    .where(
+                        questions_table.c.question_type == question["question_type"],
+                        questions_table.c.status == "PENDING",
+                        transactions_table.c.merchant_clean
+                        == transaction_row["merchant_clean"],
+                    )
+                ).all()
+        if is_category:
+            category = answer.strip()
+            if not category:
+                raise ValueError("Category cannot be empty")
+            return self._apply_category_answer(
+                int(transaction_row["id"]), category
+            )
         transaction = self.repository.get(question["transaction_id"])
         if transaction is None:
             return None
@@ -191,26 +200,12 @@ class AppService:
             if (item := self.repository.get(transaction_id)) is not None
         ]
         question_ids = [question_id for question_id, _ in merchant_questions]
-        predicted = transaction.category if transaction else "Other"
-        promoted = False
         for pending_question_id in question_ids:
             self.clarification.answer_question(pending_question_id, answer)
-        if question["question_type"] == "CATEGORY" and transaction:
-            promoted = FeedbackLearner(self.repository.engine).record_answer(
-                transaction, predicted, answer
-            )
-            self.repository.update(transaction)
         count = len(transactions)
         merchant = transaction.merchant_clean if transaction else "Merchant"
         question_type = question["question_type"]
-        if question_type == "CATEGORY":
-            message = (
-                f"Learned: {merchant} = {answer}. {count - 1} more {merchant} "
-                "payments updated."
-                if promoted
-                else f"Set {merchant} to {answer} for {count} transactions."
-            )
-        elif question_type == "LOCATION":
+        if question_type == "LOCATION":
             message = f"{merchant} location set to {answer} for {count} transactions."
         elif question_type == "RECURRING":
             message = f"{merchant} recurring status set to {answer} for {count} transactions."
@@ -227,6 +222,119 @@ class AppService:
             )
         return message
 
+    def correct_category(self, transaction_id: int, category: str) -> str:
+        """Apply a manual correction through the same learning path as Inbox answers."""
+        selected = category.strip()
+        if not selected:
+            raise ValueError("Category cannot be empty")
+        return self._apply_category_answer(transaction_id, selected)
+
+    def _apply_category_answer(
+        self, transaction_id: int, category: str
+    ) -> str:
+        """Update merchant transactions and persist reversible learning state."""
+        from expense_ai.ai.feedback import FeedbackLearner
+
+        transaction = self.repository.get(transaction_id)
+        if transaction is None:
+            raise ValueError(f"Transaction {transaction_id} does not exist")
+        now = datetime.now()
+        with Session(self.repository.engine) as session:
+            merchant_rows = session.execute(select(transactions_table).where(
+                transactions_table.c.merchant_clean == transaction.merchant_clean
+            )).mappings().all()
+            affected = [
+                dict(row) for row in merchant_rows
+                if row["id"] == transaction_id
+                or not (
+                    row["method"] == "USER"
+                    and row["status"] in ("CONFIRMED", "CORRECTED")
+                    and row["category"] != category
+                )
+            ]
+            category_questions = session.execute(
+                select(questions_table)
+                .join(
+                    transactions_table,
+                    questions_table.c.transaction_id == transactions_table.c.id,
+                )
+                .where(
+                    transactions_table.c.merchant_clean == transaction.merchant_clean,
+                    questions_table.c.question_type == "CATEGORY",
+                    questions_table.c.status.in_(("PENDING", "QUEUED")),
+                )
+            ).mappings().all()
+            rule = session.execute(select(merchant_rules_table).where(
+                merchant_rules_table.c.pattern == transaction.merchant_clean
+            )).mappings().first()
+            previous_state: dict[str, object] = {
+                "transactions": [
+                    {
+                        "id": row["id"],
+                        "category": row["category"],
+                        "status": row["status"],
+                        "method": row["method"],
+                        "confidence_score": row["confidence_score"],
+                        "explanation": row["explanation"],
+                    }
+                    for row in affected
+                ],
+                "questions": [
+                    {
+                        "id": row["id"],
+                        "status": row["status"],
+                        "answer": row["answer"],
+                        "answered_at": row["answered_at"],
+                        "surfaced_at": row["surfaced_at"],
+                    }
+                    for row in category_questions
+                ],
+                "rule": dict(rule) if rule else None,
+            }
+            for row in affected:
+                status = "CONFIRMED" if row["category"] == category else "CORRECTED"
+                session.execute(transactions_table.update().where(
+                    transactions_table.c.id == row["id"]
+                ).values(
+                    category=category,
+                    status=status,
+                    method="USER",
+                    confidence_score=1.0,
+                    explanation=f"Confirmed by you on {now.date().isoformat()}",
+                ))
+            for row in category_questions:
+                session.execute(questions_table.update().where(
+                    questions_table.c.id == row["id"]
+                ).values(status="ANSWERED", answer=category, answered_at=now))
+            session.commit()
+
+        learner = FeedbackLearner(self.repository.engine)
+        learner.record_answer(
+            transaction, transaction.category, category, explicit=True
+        )
+        with Session(self.repository.engine) as session:
+            previous_state["feedback_id"] = session.execute(
+                select(func.max(feedback_table.c.id)).where(
+                    feedback_table.c.transaction_id == transaction_id
+                )
+            ).scalar_one()
+        message = (
+            f"Confirmed {transaction.merchant_clean} as {category}; "
+            f"updated {len(affected)} transactions."
+        )
+        self.log_activity(
+            transaction_id,
+            "CATEGORY_ANSWER",
+            message,
+            method="USER",
+            confidence=1.0,
+            explanation=f"Confirmed by you on {now.date().isoformat()}",
+            previous_state=previous_state,
+        )
+        if learner.should_retrain():
+            self.train_ml_if_ready()
+        return message
+
     def log_activity(
         self,
         transaction_id: int | None,
@@ -235,6 +343,7 @@ class AppService:
         method: str | None = None,
         confidence: float | None = None,
         explanation: str | None = None,
+        previous_state: dict[str, object] | None = None,
     ) -> None:
         """Persist a user-visible AI decision or data change."""
         if transaction_id is None:
@@ -247,9 +356,94 @@ class AppService:
                 method=method,
                 confidence=confidence,
                 explanation=explanation,
+                previous_state=(
+                    json.dumps(previous_state, default=lambda value: value.isoformat())
+                    if previous_state is not None else None
+                ),
                 created_at=datetime.now(),
             ))
             session.commit()
+
+    def get_last_category_action(self) -> dict[str, object] | None:
+        """Return the most recent category action that can still be undone."""
+        with Session(self.repository.engine) as session:
+            row = session.execute(
+                select(activity_log_table)
+                .where(activity_log_table.c.event_type == "CATEGORY_ANSWER")
+                .order_by(activity_log_table.c.created_at.desc(),
+                          activity_log_table.c.id.desc())
+                .limit(1)
+            ).mappings().first()
+        return dict(row) if row else None
+
+    def undo_category_change(self, transaction_id: int | None = None) -> bool:
+        """Restore the latest matching category action and its learning effects."""
+        from expense_ai.ai.feedback import FeedbackLearner
+
+        statement = select(activity_log_table).where(
+            activity_log_table.c.event_type == "CATEGORY_ANSWER"
+        )
+        if transaction_id is not None:
+            statement = statement.where(
+                activity_log_table.c.transaction_id == transaction_id
+            )
+        statement = statement.order_by(
+            activity_log_table.c.created_at.desc(),
+            activity_log_table.c.id.desc(),
+        ).limit(1)
+        with Session(self.repository.engine) as session:
+            action = session.execute(statement).mappings().first()
+        if action is None or not action["previous_state"]:
+            return False
+        previous = json.loads(action["previous_state"])
+        transaction = self.repository.get(int(action["transaction_id"]))
+        if transaction is None:
+            return False
+        with Session(self.repository.engine) as session:
+            for row in previous["transactions"]:
+                session.execute(transactions_table.update().where(
+                    transactions_table.c.id == row["id"]
+                ).values(
+                    category=row["category"],
+                    status=row["status"],
+                    method=row["method"],
+                    confidence_score=row["confidence_score"],
+                    explanation=row["explanation"],
+                ))
+            for row in previous["questions"]:
+                session.execute(questions_table.update().where(
+                    questions_table.c.id == row["id"]
+                ).values(
+                    status=row["status"],
+                    answer=row["answer"],
+                    answered_at=(
+                        datetime.fromisoformat(row["answered_at"])
+                        if row["answered_at"] else None
+                    ),
+                    surfaced_at=(
+                        datetime.fromisoformat(row["surfaced_at"])
+                        if row["surfaced_at"] else None
+                    ),
+                ))
+            session.execute(activity_log_table.update().where(
+                activity_log_table.c.id == action["id"]
+            ).values(event_type="CATEGORY_ANSWER_UNDONE"))
+            session.commit()
+        FeedbackLearner(self.repository.engine).undo_correction(
+            transaction,
+            str(next(
+                row["category"] for row in previous["transactions"]
+                if row["id"] == transaction.id
+            )),
+            int(previous["feedback_id"]) if previous.get("feedback_id") else None,
+            previous.get("rule"),
+        )
+        self.log_activity(
+            transaction.id,
+            "UNDO_CATEGORY_ANSWER",
+            f"Undid category confirmation for {transaction.merchant_clean}.",
+        )
+        return True
 
     def get_activity_log(
         self, transaction_id: int | None = None, limit: int = 100
@@ -273,7 +467,6 @@ class AppService:
                    if item.__class__.__name__ == "MLCategoriser"), None)
         if ml is None:
             ml = MLCategoriser()
-            self.pipeline.categorisers.append(ml)
         labelled: list[Transaction] = []
         with Session(self.repository.engine) as session:
             from expense_ai.storage.database import feedback_table
@@ -287,12 +480,18 @@ class AppService:
             if item.method == "RULE" and item.confidence_score >= 0.85:
                 labelled.append(item)
         labelled = [item for item in labelled if item.category != "Other"]
-        if len(labelled) < 10 or len({item.category for item in labelled}) < 2:
-            return False
-        category_counts = {}
+        deduplicated: dict[tuple[str, str], Transaction] = {}
+        for item in labelled:
+            merchant = (item.merchant_clean or item.merchant_raw).casefold().strip()
+            deduplicated.setdefault((merchant, item.category), item)
+        labelled = list(deduplicated.values())
+        category_counts: dict[str, int] = {}
         for item in labelled:
             category_counts[item.category] = category_counts.get(item.category, 0) + 1
-        if min(category_counts.values()) < 2:
+        labelled = [
+            item for item in labelled if category_counts[item.category] >= 2
+        ]
+        if len(labelled) < 10 or len({item.category for item in labelled}) < 2:
             return False
         ml.train(
             [item.merchant_clean or item.merchant_raw for item in labelled],
@@ -300,6 +499,8 @@ class AppService:
             [item.amount for item in labelled],
             [item.timestamp.hour for item in labelled],
         )
+        if not ml.is_trained():
+            return False
         if ml not in self.pipeline.categorisers:
             self.pipeline.categorisers.append(ml)
         return True

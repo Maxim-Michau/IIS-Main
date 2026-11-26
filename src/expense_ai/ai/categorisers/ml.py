@@ -2,8 +2,10 @@
 
 from pathlib import Path
 from typing import Sequence
+import logging
 import warnings
 import joblib
+import sklearn
 from scipy import sparse
 from scipy.optimize import OptimizeWarning
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -19,6 +21,7 @@ warnings.filterwarnings(
     message=r"Unknown solver options: iprint",
     category=OptimizeWarning,
 )
+logger = logging.getLogger(__name__)
 
 
 class MLCategoriser(Categoriser):
@@ -27,7 +30,23 @@ class MLCategoriser(Categoriser):
     def __init__(self, model_path: str | Path = MODEL_PATH) -> None:
         """Load a persisted model if available."""
         self.model_path = Path(model_path)
-        self.model = joblib.load(self.model_path) if self.model_path.exists() else None
+        self.model = None
+        if self.model_path.exists():
+            try:
+                payload = joblib.load(self.model_path)
+            except Exception:
+                logger.exception("Could not load ML model from %s", self.model_path)
+            else:
+                if (
+                    not isinstance(payload, dict)
+                    or payload.get("sklearn_version") != sklearn.__version__
+                    or "model" not in payload
+                ):
+                    logger.warning(
+                        "Ignoring incompatible ML model at %s", self.model_path
+                    )
+                else:
+                    self.model = payload["model"]
 
     def is_trained(self) -> bool:
         """Return whether a persisted or in-memory model is available."""
@@ -54,7 +73,10 @@ class MLCategoriser(Categoriser):
         classifier.fit(sparse.hstack([merchant_features, numeric]), categories)
         self.model = (features, classifier)
         self.model_path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self.model, self.model_path)
+        joblib.dump({
+            "sklearn_version": sklearn.__version__,
+            "model": self.model,
+        }, self.model_path)
 
     def categorise(self, transaction: Transaction) -> Prediction:
         """Return calibrated class probability or a low-confidence fallback."""

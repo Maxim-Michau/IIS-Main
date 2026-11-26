@@ -40,31 +40,19 @@ def render(service: object) -> None:
                                  key=f"category-{transaction_id}")
         col1, col2 = st.columns(2)
         if col1.button("Correct", key=f"correct-{transaction_id}"):
-            previous = transaction.category
-            transaction.category = category
-            transaction.status = "CORRECTED"
-            service.repository.update(transaction)
-            service.log_activity(
-                transaction.id,
-                "MANUAL_CORRECTION",
-                f"Changed {transaction.merchant_clean} from {previous} to {category}.",
-                transaction.method,
-                transaction.confidence_score,
-                transaction.explanation,
-            )
-            st.success(f"Changed {transaction.merchant_clean} to {category}")
+            try:
+                message = service.correct_category(transaction_id, category)
+            except ValueError as error:
+                st.error(str(error))
+            else:
+                st.success(message)
+                st.rerun()
         if col2.button("Undo", key=f"undo-{transaction_id}"):
-            transaction.status = "TENTATIVE"
-            service.repository.update(transaction)
-            service.log_activity(
-                transaction.id,
-                "UNDO",
-                f"Reset {transaction.merchant_clean} to tentative status.",
-                transaction.method,
-                transaction.confidence_score,
-                transaction.explanation,
-            )
-            st.info("Correction undone")
+            if service.undo_category_change(transaction_id):
+                st.info("Correction undone.")
+                st.rerun()
+            else:
+                st.info("No correction is available to undo for this transaction.")
         with st.expander("Why this category?"):
             st.write(f"Method: {transaction.method or 'RULE'}")
             st.write(f"Confidence: {transaction.confidence_score:.0%}")

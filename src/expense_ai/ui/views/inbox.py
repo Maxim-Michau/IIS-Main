@@ -22,6 +22,10 @@ def render(service: object) -> None:
     if message:
         st.success(message)
         st.toast(message)
+    if service.get_last_category_action() and st.button("Undo last category answer"):
+        if service.undo_category_change():
+            st.info("Last category answer undone.")
+            st.rerun()
 
     questions = service.get_pending_questions()
     queued_count = service.get_queued_question_count()
