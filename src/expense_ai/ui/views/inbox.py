@@ -24,6 +24,12 @@ def render(service: object) -> None:
         st.toast(message)
 
     questions = service.get_pending_questions()
+    queued_count = service.get_queued_question_count()
+    if queued_count:
+        st.info(f"{queued_count} more questions queued.")
+        if st.button("Release next batch (ignores daily cap)"):
+            service.release_next_question_batch()
+            st.rerun()
     if not questions:
         st.success("No pending questions.")
         return
@@ -141,16 +147,17 @@ def _category_controls(
     suggestions = list(dict.fromkeys(
         option for question in questions
         for option in str(question["options"] or "").split("|")
-        if option and option in CATEGORIES
+        if option
     ))[:3]
     for index, category in enumerate(suggestions):
         if st.button(category, key=f"q-{question_id}-category-button-{index}"):
             _answer(service, question_id, category)
             st.rerun()
 
+    categories = list(dict.fromkeys(CATEGORIES + suggestions))
     selected = st.selectbox(
         "All categories",
-        CATEGORIES,
+        categories,
         key=f"q-{question_id}-category-select-{len(suggestions)}",
     )
     custom = st.text_input(

@@ -37,6 +37,7 @@ questions_table = Table(
     Column("answer", String),
     Column("created_at", DateTime),
     Column("answered_at", DateTime),
+    Column("surfaced_at", DateTime),
 )
 feedback_table = Table(
     "feedback", metadata,
@@ -119,5 +120,14 @@ def create_database(database_url: str = DATABASE_URL) -> object:
             if "mcc" not in columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE transactions ADD COLUMN mcc TEXT"
+                )
+            question_columns = {
+                row[1] for row in connection.exec_driver_sql(
+                    "PRAGMA table_info(questions)"
+                ).fetchall()
+            }
+            if "surfaced_at" not in question_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE questions ADD COLUMN surfaced_at DATETIME"
                 )
     return engine

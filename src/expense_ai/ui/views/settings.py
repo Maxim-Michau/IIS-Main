@@ -39,7 +39,8 @@ def render(service: object) -> None:
             ("SQ *NEW CAFE", "Unknown Cafe", "Eating Out", 9.5),
             ("AMZNMKTPLACE", "Amazon", "Shopping", 31.0),
         ]
-        before = len(service.get_pending_questions())
+        before_surfaced = len(service.get_pending_questions())
+        before_queued = service.get_queued_question_count()
         ingested = []
         now = datetime.now()
         for offset in range(4):
@@ -53,9 +54,13 @@ def render(service: object) -> None:
                 source="SYNTHETIC",
             )
             ingested.append(service.ingest(transaction))
-        after = len(service.get_pending_questions())
-        st.success(f"Added {len(ingested)} fresh transactions; "
-                   f"{max(0, after - before)} new questions created.")
+        after_surfaced = len(service.get_pending_questions())
+        after_queued = service.get_queued_question_count()
+        st.success(
+            f"Added {len(ingested)} fresh transactions; "
+            f"{max(0, after_surfaced - before_surfaced)} surfaced and "
+            f"{max(0, after_queued - before_queued)} queued questions."
+        )
     if st.button("Reset demo data"):
         from sqlalchemy import delete
         from sqlalchemy.orm import Session

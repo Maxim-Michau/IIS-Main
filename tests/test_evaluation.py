@@ -30,6 +30,7 @@ def test_daily_cap_counts_answered_questions(engine) -> None:
     first = Transaction(None, now, 10.0, "Tesco", "Tesco", "Birmingham")
     first.id = 1
     clarification._create_question(first, "CATEGORY", "Category?", ["Groceries"])
+    assert clarification.release_questions() == 1
     with Session(engine) as session:
         question_id = session.execute(select(questions_table.c.id)).scalar_one()
 
@@ -38,7 +39,12 @@ def test_daily_cap_counts_answered_questions(engine) -> None:
     second.id = 2
     clarification._create_question(second, "CATEGORY", "Category?", ["Groceries"])
 
-    assert clarification.daily_question_count() == 1
+    assert clarification.daily_question_count() == 2
     assert clarification.daily_pending_count() == 0
     with Session(engine) as session:
-        assert len(session.execute(select(questions_table)).all()) == 1
+        statuses = [
+            row.status for row in session.execute(
+                select(questions_table.c.status).order_by(questions_table.c.id)
+            ).all()
+        ]
+    assert statuses == ["ANSWERED", "QUEUED"]

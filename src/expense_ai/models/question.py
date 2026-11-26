@@ -18,3 +18,4 @@ class Question:
     answer: Optional[str] = None
     created_at: datetime = field(default_factory=datetime.now)
     answered_at: Optional[datetime] = None
+    surfaced_at: Optional[datetime] = None

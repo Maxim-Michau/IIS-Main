@@ -33,6 +33,7 @@ class AppService:
                 RecurrenceDetector,
             )):
                 categoriser.engine = engine
+        self.clarification.release_questions()
 
     def configure_clarification(self, auto_threshold: float, ask_threshold: float,
                                 max_questions_per_day: int) -> None:
@@ -41,7 +42,9 @@ class AppService:
         self.clarification.ask_threshold = ask_threshold
         self.clarification.max_questions_per_day = max_questions_per_day
 
-    def ingest(self, transaction: Transaction) -> Transaction:
+    def ingest(
+        self, transaction: Transaction, release_questions: bool = True
+    ) -> Transaction:
         """Categorise, clarify and persist one transaction."""
         prediction, options = self.pipeline.categorise_with_options(transaction)
         transaction.category = prediction.category
@@ -51,11 +54,13 @@ class AppService:
         transaction.true_category = None
         saved = self.repository.add(transaction)
         clarification = self.clarification
-        clarification.decide(saved, prediction, options)
+        clarification.decide(saved, prediction, options, release=False)
         clarification.location_question(saved)
         clarification.extra_info_question(saved)
         clarification.recurring_question(saved)
         saved = self.repository.update(saved)
+        if release_questions:
+            clarification.release_questions()
         self.log_activity(
             saved.id,
             "AI_DECISION",
@@ -68,8 +73,12 @@ class AppService:
 
     def ingest_all(self, transactions: Iterable[Transaction]) -> list[Transaction]:
         """Ingest a collection of transactions."""
-        ingested = [self.ingest(transaction) for transaction in transactions]
+        ingested = [
+            self.ingest(transaction, release_questions=False)
+            for transaction in transactions
+        ]
         self.train_ml_if_ready()
+        self.clarification.release_questions()
         return ingested
 
     def get_transactions(self, limit: int | None = None) -> list[Transaction]:
@@ -82,6 +91,21 @@ class AppService:
             return [dict(row) for row in session.execute(
                 select(questions_table).where(questions_table.c.status == "PENDING")
             ).mappings().all()]
+
+    def get_queued_question_count(self) -> int:
+        """Return the number of questions waiting to be surfaced."""
+        from sqlalchemy import func
+
+        with Session(self.repository.engine) as session:
+            return int(session.execute(
+                select(func.count()).select_from(questions_table).where(
+                    questions_table.c.status == "QUEUED"
+                )
+            ).scalar_one())
+
+    def release_next_question_batch(self) -> int:
+        """Release one demo batch without applying questions already surfaced today."""
+        return self.clarification.release_questions(ignore_daily_cap=True)
 
     def save_budget(self, category: str, monthly_limit: float, month: str) -> None:
         """Create or replace a category budget for a calendar month."""
