@@ -2,7 +2,7 @@
 
 An offline-first personal-finance assistant for a UK university student, built with Python, Streamlit, SQLite and scikit-learn.
 
-> **README prose word count: 488 words.** Counts prose paragraphs and list items; excludes headings, fenced code, tables, and link destinations.
+> **README prose word count: 489 words.** Counts prose paragraphs and list items; excludes headings, fenced code, tables, and link destinations.
 
 ## Status
 
@@ -80,8 +80,8 @@ Set `EXPENSE_AI_DATABASE_URL` to override the default SQLite database URL; this 
 
 ### Stage 8 — README and documentation
 
-- Commit: Added the computed README prose count, this staged development record, and the AI-assistance disclosure.
-- Checked: `python -m pytest -v` — **65 passed in 4.98s**.
+- Commit: [ae72c94](https://github.com/Maxim-Michau/IIS-Main/commit/ae72c94) added the computed README prose count, this staged development record, and the AI-assistance disclosure.
+- Checked: `python -m pytest -v` — **65 passed in 4.92s**.
 
 ## Measured evaluation
 
