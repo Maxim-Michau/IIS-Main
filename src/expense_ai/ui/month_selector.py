@@ -2,6 +2,7 @@
 
 import streamlit as st
 
+from expense_ai.insights.insight_engine import monthly_category_spending
 from expense_ai.models.transaction import Transaction
 
 
@@ -34,13 +35,19 @@ def render_budget_progress(
     if not budgets:
         st.info("No budget is configured for this month.")
         return
+    monthly = monthly_category_spending(transactions, month)
     for category, limit in budgets.items():
-        spent = sum(
-            item.amount for item in transactions
-            if item.category == category and item.timestamp.strftime("%Y-%m") == month
-        )
-        ratio = spent / limit if limit else 0.0
+        spent = monthly.get(category, 0.0)
         st.write(f"**{category}** · GBP {spent:.2f} of GBP {limit:.2f}")
+        if limit == 0:
+            if spent > 0:
+                st.progress(1.0, text="No budget set")
+                st.error(f"GBP {spent:.2f} over the £0.00 budget.")
+            else:
+                st.progress(0.0, text="No spending against £0.00 budget")
+                st.caption("No spending against this zero budget.")
+            continue
+        ratio = spent / limit
         st.progress(min(1.0, ratio), text=f"{ratio:.0%} used")
         if spent >= limit:
             st.error(f"GBP {spent - limit:.2f} over budget.")

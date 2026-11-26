@@ -120,6 +120,8 @@ class AppService:
 
     def save_budget(self, category: str, monthly_limit: float, month: str) -> None:
         """Create or replace a category budget for a calendar month."""
+        if monthly_limit < 0:
+            raise ValueError("Budget limit cannot be negative")
         with Session(self.repository.engine) as session:
             existing = session.execute(select(budgets_table).where(
                 budgets_table.c.category == category,
@@ -137,6 +139,37 @@ class AppService:
                     month=month,
                 ))
             session.commit()
+
+    def get_budget_records(self) -> list[dict[str, object]]:
+        """Return persisted budgets with IDs for editing and deletion."""
+        with Session(self.repository.engine) as session:
+            rows = session.execute(
+                select(budgets_table).order_by(
+                    budgets_table.c.month, budgets_table.c.category
+                )
+            ).mappings().all()
+        return [dict(row) for row in rows]
+
+    def update_budget(self, budget_id: int, monthly_limit: float) -> None:
+        """Update a persisted budget's monthly limit."""
+        if monthly_limit < 0:
+            raise ValueError("Budget limit cannot be negative")
+        with Session(self.repository.engine) as session:
+            result = session.execute(budgets_table.update().where(
+                budgets_table.c.id == budget_id
+            ).values(monthly_limit=monthly_limit))
+            if result.rowcount == 0:
+                raise ValueError(f"Budget {budget_id} does not exist")
+            session.commit()
+
+    def delete_budget(self, budget_id: int) -> bool:
+        """Delete a persisted budget by ID."""
+        with Session(self.repository.engine) as session:
+            result = session.execute(delete(budgets_table).where(
+                budgets_table.c.id == budget_id
+            ))
+            session.commit()
+        return result.rowcount > 0
 
     def get_budgets(self, month: str) -> dict[str, float]:
         """Return recurring defaults overridden by budgets for the requested month."""
