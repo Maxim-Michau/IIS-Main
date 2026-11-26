@@ -1,10 +1,12 @@
 """SQLAlchemy database setup."""
 
 import logging
+from pathlib import Path
 
 from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
                         DateTime, Text, create_engine, inspect)
-from config.settings import DATABASE_PATH, DATABASE_URL
+from sqlalchemy.engine import make_url
+from config.settings import DATABASE_URL
 
 
 logger = logging.getLogger(__name__)
@@ -89,9 +91,13 @@ activity_log_table = Table(
 
 def create_database(database_url: str = DATABASE_URL) -> object:
     """Create engine, tables and parent directory."""
-    database_path = DATABASE_PATH if database_url == DATABASE_URL else None
-    if database_path:
-        database_path.parent.mkdir(parents=True, exist_ok=True)
+    parsed_url = make_url(database_url)
+    if parsed_url.get_backend_name() == "sqlite" and parsed_url.database not in (
+        None, ":memory:"
+    ):
+        Path(parsed_url.database).expanduser().parent.mkdir(
+            parents=True, exist_ok=True
+        )
     engine = create_engine(database_url)
     metadata.create_all(engine)
     budget_columns = {

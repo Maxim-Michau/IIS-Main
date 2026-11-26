@@ -9,7 +9,9 @@ load_dotenv()
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT_DIR / "data"
 DATABASE_PATH = DATA_DIR / "expense_ai.db"
-DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
+DATABASE_URL = os.getenv("EXPENSE_AI_DATABASE_URL") or (
+    f"sqlite:///{DATABASE_PATH.as_posix()}"
+)
 MODEL_PATH = DATA_DIR / "categoriser.joblib"
 
 AUTO_ACCEPT_THRESHOLD = 0.85
