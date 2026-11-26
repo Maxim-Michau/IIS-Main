@@ -58,22 +58,47 @@ class SyntheticBankSource(BankSource):
             ("CARD PAYMENT CAFE 77", "Unknown Cafe", "Eating Out", 8.5),
         ]
         rows: list[Transaction] = []
-        # MCC values below are simulated bank fields, not observed bank data.
-        mcc_by_category = {
-            "Groceries": "5411", "Eating Out": "5812", "Takeaways": "5814",
-            "Transport": "4111", "Rent & Bills": "4900", "Subscriptions": "5816",
-            "Shopping": "5941", "Entertainment": "5812", "Education": "5942",
-            "Health & Fitness": "7997",
+        mcc_options = {
+            "Groceries": ("5411", "5499", None),
+            "Eating Out": ("5812", "5814", None),
+            "Takeaways": ("5812", "5814", None),
+            "Transport": ("4111", "4121", None),
+            "Rent & Bills": ("4900", "6513", None),
+            "Subscriptions": ("4899", "5816", None),
+            "Shopping": ("5941", "5999", "5311", None),
+            "Entertainment": ("7999", "7922", None),
+            "Education": ("5942", "8299", None),
+            "Health & Fitness": ("7997", "8011", None),
         }
+        trip_starts = rng.sample(
+            range((end_day - start).days + 1),
+            min(3, max(1, (end_day - start).days // 45)),
+        )
+        trip_locations = ("Manchester", "London", "Liverpool")
         for day in range((end_day - start).days + 1):
             current = datetime.combine(start + timedelta(days=day), datetime.min.time())
             count = 3 if day % 3 else 5
             if day > 120:
                 count += 1
+            trip_index = next(
+                (index for index, trip_start in enumerate(trip_starts)
+                 if trip_start <= day < trip_start + 3),
+                None,
+            )
+            if trip_index is not None:
+                location_options = (trip_locations[trip_index],) * 3 + (None,)
+            else:
+                location_options = (
+                    "Birmingham", "Birmingham", "Birmingham", "Birmingham",
+                    "Coventry", "Solihull", None,
+                )
             for _ in range(count):
                 merchant_raw, merchant_clean, category, typical = rng.choice(merchants)
                 amount = round(max(1.0, rng.normalvariate(typical, typical * 0.25)), 2)
-                location = rng.choice(["Birmingham", "Birmingham", "Birmingham", "Manchester", None])
+                location = rng.choice(location_options)
+                mcc = rng.choice(mcc_options.get(category, (None,)))
+                if merchant_clean in {"Amazon", "paypal unknown"}:
+                    mcc = rng.choice(("5999", "4829", None))
                 rows.append(Transaction(
                     id=None, timestamp=current.replace(hour=rng.choice([8, 10, 12, 14, 18, 21, 23]),
                                                          minute=rng.choice([0, 15, 30, 45]),
@@ -81,7 +106,7 @@ class SyntheticBankSource(BankSource):
                     amount=amount, merchant_raw=merchant_raw, merchant_clean=merchant_clean,
                     location=location, category="Other", true_category=category,
                     confidence_score=0.0, status="TENTATIVE", source="SYNTHETIC",
-                    mcc=mcc_by_category.get(category),
+                    mcc=mcc,
                 ))
         for month in range(self.months):
             rent_month_index = start.year * 12 + start.month - 1 + month
@@ -99,6 +124,6 @@ class SyntheticBankSource(BankSource):
                 location="Birmingham", category="Other", confidence_score=0.0,
                 status="TENTATIVE", explanation="", source="SYNTHETIC",
                 true_category="Rent & Bills", method="RULE",
-                mcc=mcc_by_category["Rent & Bills"],
+                mcc=rng.choice(mcc_options["Rent & Bills"]),
             ))
-        return rows
+        return sorted(rows, key=lambda item: item.timestamp)

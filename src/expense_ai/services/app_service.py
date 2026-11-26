@@ -2,6 +2,7 @@
 
 from datetime import datetime
 import json
+from pathlib import Path
 from typing import Iterable
 from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Transaction
@@ -18,10 +19,18 @@ from expense_ai.storage.database import (
 class AppService:
     """Coordinate transaction ingestion and application queries."""
 
-    def __init__(self, engine: Engine, pipeline: CategorisationPipeline) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        pipeline: CategorisationPipeline,
+        model_path: str | Path | None = None,
+        enable_ml_training: bool = True,
+    ) -> None:
         """Initialise service dependencies."""
         self.repository = TransactionRepository(engine)
         self.pipeline = pipeline
+        self.model_path = model_path
+        self.enable_ml_training = enable_ml_training
         from expense_ai.ai.clarification import ClarificationEngine
         self.clarification = ClarificationEngine(engine)
         from expense_ai.ai.categorisers.rule import RuleCategoriser
@@ -78,7 +87,8 @@ class AppService:
             self.ingest(transaction, release_questions=False)
             for transaction in transactions
         ]
-        self.train_ml_if_ready()
+        if self.enable_ml_training:
+            self.train_ml_if_ready()
         self.clarification.release_questions()
         return ingested
 
@@ -463,10 +473,12 @@ class AppService:
     def train_ml_if_ready(self) -> bool:
         """Train the service ML categoriser once enough labelled rows exist."""
         from expense_ai.ai.categorisers.ml import MLCategoriser
+        if not self.enable_ml_training:
+            return False
         ml = next((item for item in self.pipeline.categorisers
                    if item.__class__.__name__ == "MLCategoriser"), None)
         if ml is None:
-            ml = MLCategoriser()
+            ml = MLCategoriser(self.model_path) if self.model_path else MLCategoriser()
         labelled: list[Transaction] = []
         with Session(self.repository.engine) as session:
             from expense_ai.storage.database import feedback_table

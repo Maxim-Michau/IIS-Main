@@ -1,6 +1,6 @@
 """Tests for type-correct simulated-user answers and daily question caps."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from expense_ai.ai.clarification import ClarificationEngine
 from expense_ai.models.transaction import Transaction
 from expense_ai.storage.database import questions_table
 from scripts.simulate_user import simulated_answer
+from scripts.simulate_user import run_simulation
 
 
 def test_simulated_user_answers_only_matching_question_types() -> None:
@@ -48,3 +49,19 @@ def test_daily_cap_counts_answered_questions(engine) -> None:
             ).all()
         ]
     assert statuses == ["ANSWERED", "QUEUED"]
+
+
+def test_simulation_uses_weekly_holdout_metrics_and_queue() -> None:
+    """The app-path simulation reports early/held-out accuracy and queue backlog."""
+    measured = run_simulation(
+        months=2,
+        end_date=date(2026, 6, 30),
+        pipeline_stage="rules",
+        apply_feedback=True,
+    )
+
+    assert measured["week_1_2_accuracy"] >= 0.0
+    assert measured["week_5_plus_transactions"] > 0
+    assert measured["category_questions_per_week"] >= 0.0
+    assert measured["daily_question_cap"] == 5
+    assert measured["queued_backlog"] >= 0
