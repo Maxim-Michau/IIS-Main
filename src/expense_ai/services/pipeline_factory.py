@@ -29,4 +29,9 @@ def build_pipeline(settings_module: object = settings) -> CategorisationPipeline
     )
     if llm_enabled:
         categorisers.append(LLMCategoriser(enabled=True))
-    return CategorisationPipeline(categorisers)
+    return CategorisationPipeline(
+        categorisers,
+        ask_threshold=getattr(
+            settings_module, "ASK_THRESHOLD", settings.ASK_THRESHOLD
+        ),
+    )

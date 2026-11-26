@@ -10,29 +10,10 @@ from expense_ai.insights.insight_engine import InsightEngine
 class Advisor:
     """Answer spending questions using real transaction data."""
 
-    def __init__(self, transactions: Iterable[Transaction],
-                 llm_categoriser: object | None = None) -> None:
-        """Configure data and optional LLM."""
+    def __init__(self, transactions: Iterable[Transaction]) -> None:
+        """Configure repository data for offline answers."""
         self.transactions = list(transactions)
         self.insight_engine = InsightEngine()
-        self.llm_categoriser = llm_categoriser
-
-    def answer_with_llm(self, question: str) -> str:
-        """Use an optional mocked tool-calling client without allowing new numbers."""
-        if self.llm_categoriser is None:
-            return self.answer(question)
-        grounded = self.answer(question)
-        try:
-            tools = getattr(self.llm_categoriser, "tools", None)
-            if tools:
-                response = tools.answer(question=question, grounded_answer=grounded)
-                text = str(getattr(response, "text", response))
-                for forbidden in ["$"]:
-                    text = text.replace(forbidden, "£")
-                return text
-        except Exception:
-            pass
-        return grounded
 
     def answer(self, question: str) -> str:
         """Match common offline intents and ground answers in data."""

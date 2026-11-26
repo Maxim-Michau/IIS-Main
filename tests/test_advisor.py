@@ -34,23 +34,6 @@ def test_rent_unknown_category_and_month_filters() -> None:
     assert "£675.00" in advisor.answer("How much did I spend in October?")
 
 
-def test_advisor_llm_mock_stays_grounded() -> None:
-    """A mocked LLM adapter receives repository-grounded text and can fail safely."""
-    transactions = [
-        Transaction(None, datetime(2026, 10, 5), 650.0, "Rent", "Rent",
-                    "Birmingham", "Rent & Bills"),
-    ]
-    class Tool:
-        @staticmethod
-        def answer(question: str, grounded_answer: str) -> str:
-            return grounded_answer
-    class MockLLM:
-        tools = Tool()
-    assert "£650.00" in Advisor(transactions, MockLLM()).answer_with_llm(
-        "How much did I spend on rent?"
-    )
-
-
 def test_chart_for_monthly_category_and_merchant_questions() -> None:
     """Charts use named month data and match category or merchant intent."""
     transactions = [

@@ -38,7 +38,7 @@ The app also offers an in-browser button to generate synthetic data when the dat
 
 ## Optional LLM key
 
-Copy `.env.example` to `.env`, set `USE_LLM=true`, and set `ANTHROPIC_API_KEY` to your own key. Never commit `.env`. LLM use is optional and every answer should remain grounded in repository data.
+Copy `.env.example` to `.env`, set `USE_LLM=true`, and set `ANTHROPIC_API_KEY` to your own key. Never commit `.env`. The optional LLM is used only for transaction categorisation; Advisor answers remain offline and use repository data.
 
 ## Development record
 

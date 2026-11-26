@@ -1,6 +1,6 @@
 """Feature-based categorisation using transaction context and user history."""
 
-from collections import defaultdict
+from collections import Counter
 
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
@@ -9,6 +9,14 @@ from sqlalchemy.orm import Session
 from expense_ai.ai.categorisers.base import Categoriser
 from expense_ai.models.transaction import Prediction, Transaction
 from expense_ai.storage.database import transactions_table
+from config.settings import (
+    CONTEXT_AGREEMENT_CONFIDENCE_MAX,
+    CONTEXT_AGREEMENT_CONFIDENCE_RANGE,
+    CONTEXT_BASE_CONFIDENCE,
+    CONTEXT_HISTORY_CONFIDENCE_MAX,
+    CONTEXT_HISTORY_CONFIDENCE_RANGE,
+    CONTEXT_MCC_CONFIDENCE,
+)
 
 
 MCC_CATEGORIES = {
@@ -31,37 +39,49 @@ class ContextCategoriser(Categoriser):
         self.engine = engine
 
     def categorise(self, transaction: Transaction) -> Prediction:
-        scores: dict[str, float] = defaultdict(float)
-        evidence: dict[str, list[str]] = defaultdict(list)
-
         mcc_category = MCC_CATEGORIES.get(transaction.mcc or "")
-        if mcc_category:
-            scores[mcc_category] += 0.38
-            evidence[mcc_category].append("simulated bank MCC")
-
-        if transaction.mcc in {"5812", "5814"} and (
-            transaction.timestamp.hour >= 21 or transaction.timestamp.hour < 5
+        history = [
+            row for row in self._confirmed_history()
+            if row.merchant_clean.casefold() == transaction.merchant_clean.casefold()
+        ]
+        counts = Counter(row.category for row in history)
+        history_category, history_count = counts.most_common(1)[0] if counts else (None, 0)
+        total = sum(counts.values())
+        history_share = history_count / total if total else 0.0
+        agrees = bool(mcc_category and history_category == mcc_category)
+        if mcc_category and history_category and agrees:
+            category = mcc_category
+            confidence = min(
+                CONTEXT_AGREEMENT_CONFIDENCE_MAX,
+                CONTEXT_MCC_CONFIDENCE
+                + history_share * CONTEXT_AGREEMENT_CONFIDENCE_RANGE,
+            )
+            evidence = "merchant history and MCC agree"
+        elif mcc_category:
+            category = mcc_category
+            confidence = CONTEXT_MCC_CONFIDENCE
+            evidence = "simulated bank MCC"
+        elif history_category:
+            category = history_category
+            confidence = min(
+                CONTEXT_HISTORY_CONFIDENCE_MAX,
+                CONTEXT_BASE_CONFIDENCE
+                + history_share * CONTEXT_HISTORY_CONFIDENCE_RANGE,
+            )
+            evidence = "confirmed history for this merchant"
+        else:
+            return Prediction(
+                "Other",
+                CONTEXT_BASE_CONFIDENCE,
+                "No merchant or MCC evidence matched.",
+                "CONTEXT",
+            )
+        if (
+            transaction.mcc in {"5812", "5814"}
+            and (transaction.timestamp.hour >= 21 or transaction.timestamp.hour < 5)
         ):
-            scores["Takeaways"] += 0.16
-            evidence["Takeaways"].append("late-night food purchase")
-
-        history = self._confirmed_history()
-        features = self._features(transaction)
-        weights = {"location": 0.10, "time": 0.12, "weekday": 0.08, "amount": 0.10, "mcc": 0.20}
-        for row in history:
-            previous_features = self._features(row)
-            category = row.category
-            for feature, weight in weights.items():
-                if features[feature] is not None and features[feature] == previous_features[feature]:
-                    scores[category] += weight
-                    evidence[category].append(f"matching {feature}")
-
-        if not scores:
-            return Prediction("Other", 0.20, "No contextual signals matched.", "CONTEXT")
-        category, score = max(scores.items(), key=lambda item: item[1])
-        confidence = min(0.82, 0.20 + score)
-        details = ", ".join(dict.fromkeys(evidence[category]))
-        return Prediction(category, confidence, f"Context signals: {details}.", "CONTEXT")
+            evidence += ", late-night food purchase"
+        return Prediction(category, confidence, f"Context signals: {evidence}.", "CONTEXT")
 
     def _confirmed_history(self) -> list[Transaction]:
         if self.engine is None:
@@ -73,15 +93,3 @@ class ContextCategoriser(Categoriser):
                 )
             ).mappings().all()
         return [Transaction(**dict(row)) for row in rows]
-
-    @staticmethod
-    def _features(transaction: Transaction) -> dict[str, object]:
-        hour = transaction.timestamp.hour
-        time_band = "late" if hour >= 21 or hour < 5 else "morning" if hour < 12 else "afternoon"
-        return {
-            "location": transaction.location,
-            "time": time_band,
-            "weekday": "weekend" if transaction.timestamp.weekday() >= 5 else "weekday",
-            "amount": "small" if transaction.amount < 10 else "medium" if transaction.amount < 50 else "large",
-            "mcc": transaction.mcc,
-        }
