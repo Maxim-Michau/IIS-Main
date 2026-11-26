@@ -2,13 +2,14 @@
 
 from datetime import datetime
 from typing import Callable
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Prediction, Transaction
 from expense_ai.storage.database import questions_table, transactions_table
 from config.settings import (AUTO_ACCEPT_THRESHOLD, ASK_THRESHOLD,
-                             MAX_QUESTIONS_PER_DAY)
+                             EXTRA_INFO_MIN_AMOUNT, MAX_QUESTIONS_PER_DAY,
+                             QUESTION_TYPE_WEIGHTS)
 
 
 class ClarificationEngine:
@@ -26,7 +27,8 @@ class ClarificationEngine:
         self.clock = clock or datetime.now
 
     def decide(self, transaction: Transaction, prediction: Prediction,
-               options: list[str] | None = None) -> str:
+               options: list[str] | None = None,
+               release: bool = True) -> str:
         """Apply confidence thresholds and persist a category question."""
         if prediction.confidence_score >= self.auto_threshold:
             transaction.status = "AUTO"
@@ -36,43 +38,91 @@ class ClarificationEngine:
             self._create_question(transaction, "CATEGORY",
                                   f"Is {transaction.merchant_clean} {prediction.category}?",
                                   options or [prediction.category])
+            if release:
+                self.release_questions()
             return "TENTATIVE"
         transaction.status = "TENTATIVE"
         top_options = options or [prediction.category, "Other"]
         self._create_question(transaction, "CATEGORY",
                               f"What category is this £{transaction.amount:.2f} payment?",
                               top_options + ["Other"] if "Other" not in top_options else top_options)
+        if release:
+            self.release_questions()
         return "ASK"
 
-    def rank_pending(self) -> list[dict[str, object]]:
-        """Rank pending questions by transaction amount and uncertainty."""
+    def release_questions(
+        self, now: datetime | None = None, ignore_daily_cap: bool = False
+    ) -> int:
+        """Surface queued questions in priority order within the daily cap."""
+        current = now or self.clock()
         with Session(self.engine) as session:
-            rows = session.execute(select(questions_table).where(
-                questions_table.c.status == "PENDING"
-            ).order_by(questions_table.c.created_at.desc())).mappings().all()
-            transactions = {
-                row["id"]: dict(row)
-                for row in session.execute(select(transactions_table)).mappings()
-            }
+            surfaced_today = session.execute(
+                select(func.count()).select_from(questions_table).where(
+                    questions_table.c.status.in_(("PENDING", "ANSWERED")),
+                    func.date(questions_table.c.surfaced_at) == current.date().isoformat(),
+                )
+            ).scalar_one()
+            available = (
+                self.max_questions_per_day
+                if ignore_daily_cap
+                else max(0, self.max_questions_per_day - int(surfaced_today))
+            )
+            if available == 0:
+                return 0
+            rows = session.execute(
+                select(questions_table, transactions_table.c.amount,
+                       transactions_table.c.confidence_score)
+                .select_from(questions_table.outerjoin(
+                    transactions_table,
+                    questions_table.c.transaction_id == transactions_table.c.id,
+                ))
+                .where(questions_table.c.status == "QUEUED")
+            ).mappings().all()
+            ranked = self._rank_rows(rows)
+            selected = ranked[:available]
+            for row in selected:
+                session.execute(update(questions_table).where(
+                    questions_table.c.id == row["id"],
+                    questions_table.c.status == "QUEUED",
+                ).values(status="PENDING", surfaced_at=current))
+            session.commit()
+        return len(selected)
+
+    @staticmethod
+    def _rank_rows(rows: object) -> list[dict[str, object]]:
+        """Return rows ordered by configured priority and prediction uncertainty."""
         ranked = []
-        for row in rows:
-            transaction = transactions.get(row["transaction_id"])
-            amount = float(transaction["amount"] if transaction else 0.0)
-            ranked.append({
-                **dict(row),
-                "_priority": amount,
-            })
+        for result in rows:
+            row = dict(result)
+            confidence = float(row.get("confidence_score") or 0.0)
+            amount = abs(float(row.get("amount") or 0.0))
+            weight = QUESTION_TYPE_WEIGHTS.get(row["question_type"], 1.0)
+            row["_priority"] = weight * (1.0 - confidence) * amount
+            ranked.append(row)
         return sorted(ranked, key=lambda row: row["_priority"], reverse=True)
 
     def location_question(self, transaction: Transaction) -> None:
         """Create a location question for missing or unusual locations."""
-        if transaction.location is None or transaction.location not in (
-            "Birmingham", "Coventry", "Solihull"
+        with Session(self.engine) as session:
+            previous_locations = session.execute(
+                select(transactions_table.c.location).where(
+                    transactions_table.c.merchant_clean == transaction.merchant_clean,
+                    transactions_table.c.id != transaction.id,
+                    transactions_table.c.location.is_not(None),
+                ).distinct()
+            ).scalars().all()
+        if transaction.location is None or (
+            previous_locations and transaction.location not in previous_locations
         ):
+            usual = ", ".join(previous_locations)
+            prompt = (
+                f"Where did this {transaction.merchant_clean} payment happen?"
+                if not usual else
+                f"This {transaction.merchant_clean} payment is in {transaction.location}; "
+                f"previous payments were in {usual}. Is this location correct?"
+            )
             self._create_question(
-                transaction, "LOCATION",
-                f"Where should I record the location for {transaction.merchant_clean}?",
-                [],
+                transaction, "LOCATION", prompt, list(previous_locations),
             )
 
     def recurring_question(self, transaction: Transaction) -> None:
@@ -114,52 +164,49 @@ class ClarificationEngine:
 
     def extra_info_question(self, transaction: Transaction) -> None:
         """Ask about unusually large or unrecognised transactions."""
-        if transaction.amount >= 100.0:
+        if (
+            transaction.amount >= EXTRA_INFO_MIN_AMOUNT
+            and transaction.category == "Other"
+        ):
             self._create_question(transaction, "EXTRA_INFO",
                                   f"What was this £{transaction.amount:.2f} for? Is it one-off or recurring?",
                                   ["One-off", "Recurring"])
 
     def daily_pending_count(self) -> int:
         """Count pending questions for today."""
-        today = self.clock().date()
         with Session(self.engine) as session:
-            rows = session.execute(select(questions_table)).mappings().all()
-        return sum(1 for row in rows if row["status"] == "PENDING"
-                   and getattr(row["created_at"], "date", lambda: today)() == today)
+            return int(session.execute(
+                select(func.count()).select_from(questions_table).where(
+                    questions_table.c.status == "PENDING",
+                    func.date(questions_table.c.surfaced_at)
+                    == self.clock().date().isoformat(),
+                )
+            ).scalar_one())
 
     def daily_question_count(self) -> int:
-        """Count all questions created today, including already answered ones."""
-        today = self.clock().date()
+        """Count questions created today, independently of surfacing."""
         with Session(self.engine) as session:
-            rows = session.execute(select(questions_table)).mappings().all()
-        return sum(
-            1 for row in rows
-            if row["created_at"] is not None and row["created_at"].date() == today
-        )
+            return int(session.execute(
+                select(func.count()).select_from(questions_table).where(
+                    func.date(questions_table.c.created_at)
+                    == self.clock().date().isoformat(),
+                )
+            ).scalar_one())
 
     def _create_question(self, transaction: Transaction, question_type: str,
                          prompt: str, options: list[str]) -> None:
-        """Persist a question unless the daily cap is reached or it is duplicate."""
-        if self.daily_question_count() >= self.max_questions_per_day:
-            return
+        """Persist a queued question unless an equivalent active one exists."""
         with Session(self.engine) as session:
             duplicate = session.execute(select(questions_table).where(
                 questions_table.c.transaction_id == transaction.id,
                 questions_table.c.question_type == question_type,
-                questions_table.c.status == "PENDING",
+                questions_table.c.status.in_(("QUEUED", "PENDING")),
             )).first()
             if duplicate:
                 return
-            if question_type == "CATEGORY":
-                answered_merchants = session.execute(select(transactions_table.c.id).where(
-                    transactions_table.c.merchant_clean == transaction.merchant_clean,
-                    transactions_table.c.status.in_(["CONFIRMED", "CORRECTED"]),
-                )).all()
-                if answered_merchants:
-                    return
             session.execute(insert(questions_table).values(
                 transaction_id=transaction.id, question_type=question_type,
-                prompt_text=prompt, options="|".join(options), status="PENDING",
+                prompt_text=prompt, options="|".join(options), status="QUEUED",
                 created_at=self.clock(),
             ))
             session.commit()

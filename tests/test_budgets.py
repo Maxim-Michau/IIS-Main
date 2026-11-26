@@ -37,3 +37,15 @@ def test_recurring_takeaways_budget_warns_in_every_over_budget_month(engine) -> 
         assert warnings
         assert "over the £150.00 budget" in warnings[0]
         assert "£1480.00 spent" in warnings[0]
+
+
+def test_saved_budget_can_be_edited_and_deleted(engine) -> None:
+    """Budget records expose stable IDs for editing and deletion."""
+    service = AppService(engine, CategorisationPipeline([RuleCategoriser()]))
+    service.save_budget("Groceries", 100.0, "2026-03")
+    record = service.get_budget_records()[0]
+
+    service.update_budget(int(record["id"]), 0.0)
+    assert service.get_budgets("2026-03") == {"Groceries": 0.0}
+    assert service.delete_budget(int(record["id"]))
+    assert service.get_budget_records() == []

@@ -1,183 +1,300 @@
 """Offline-first advisor chat grounded in repository data."""
 
-import pandas as pd
+import calendar
 from datetime import datetime
+import re
 from typing import Iterable
-from expense_ai.models.transaction import Transaction
+
+import pandas as pd
+
 from expense_ai.insights.insight_engine import InsightEngine
+from expense_ai.models.transaction import Transaction
+
+
+MONTH_NUMBERS = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+CATEGORY_SYNONYMS = {
+    "food": ("Groceries", "Eating Out", "Takeaways"),
+    "rent": ("Rent & Bills",),
+    "going out": ("Entertainment",),
+    "bills": ("Rent & Bills", "Subscriptions"),
+}
 
 
 class Advisor:
     """Answer spending questions using real transaction data."""
 
-    def __init__(self, transactions: Iterable[Transaction],
-                 llm_categoriser: object | None = None) -> None:
-        """Configure data and optional LLM."""
+    def __init__(
+        self, transactions: Iterable[Transaction], now: datetime | None = None
+    ) -> None:
+        """Configure repository data and an injectable reference time."""
         self.transactions = list(transactions)
-        self.insight_engine = InsightEngine()
-        self.llm_categoriser = llm_categoriser
-
-    def answer_with_llm(self, question: str) -> str:
-        """Use an optional mocked tool-calling client without allowing new numbers."""
-        if self.llm_categoriser is None:
-            return self.answer(question)
-        grounded = self.answer(question)
-        try:
-            tools = getattr(self.llm_categoriser, "tools", None)
-            if tools:
-                response = tools.answer(question=question, grounded_answer=grounded)
-                text = str(getattr(response, "text", response))
-                for forbidden in ["$"]:
-                    text = text.replace(forbidden, "£")
-                return text
-        except Exception:
-            pass
-        return grounded
+        self.now = now or datetime.now()
+        self.insight_engine = InsightEngine(now=self.now)
 
     def answer(self, question: str) -> str:
-        """Match common offline intents and ground answers in data."""
-        frame = pd.DataFrame([vars(transaction) for transaction in self.transactions])
-        lowered = question.lower()
+        """Answer common spending questions with exact repository totals."""
+        frame = self._frame()
         if frame.empty:
             return "There is no spending data yet."
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"])
-        if "how much" in lowered or "spent" in lowered:
-            subset = frame
-            month_subset = self._month_filter(frame, lowered)
-            if month_subset is not None:
-                subset = month_subset
-            categories = sorted(set(frame["category"].dropna().astype(str)))
-            synonyms = {
-                "food": ["Groceries", "Eating Out", "Takeaways"],
-                "rent": ["Rent & Bills"],
-                "going out": ["Entertainment"],
-                "bills": ["Rent & Bills", "Subscriptions"],
-            }
-            matched_categories: list[str] = []
-            for category in categories:
-                if category.lower() in lowered:
-                    matched_categories.append(category)
-            for synonym, names in synonyms.items():
-                if synonym in lowered:
-                    matched_categories.extend(name for name in names if name in categories)
-            matched_categories = list(dict.fromkeys(matched_categories))
-            spent_categories = lowered.replace("how much", "").replace("did i spend", "")
-            category_terms = matched_categories
-            if category_terms:
-                subset = subset[subset["category"].isin(category_terms)]
-                total = float(subset["amount"].sum())
-                label = " + ".join(category_terms)
-                return f"You spent £{total:.2f} on {label}."
-            if "in october" in lowered or "on october" in lowered or "last month" in lowered:
-                pass
-            elif " in " in lowered or " on " in lowered:
-                requested = lowered.split(" in ", 1)[-1].split(" on ", 1)[-1].strip(" ?")
-                if requested not in {"october", "january", "february", "march", "april",
-                                     "may", "june", "july", "august", "september",
-                                     "november", "december"}:
-                    if requested:
-                        return f"I don't recognise '{requested}' as a category in this repository."
-            generic_total_phrases = {
-                "how much did i spend",
-                "how much have i spent",
-                "how much did i spend overall",
-                "how much did i spend in total",
-            }
-            if not any(phrase in lowered for phrase in generic_total_phrases):
-                requested = lowered.replace("how much did i spend", "").replace("how much", "").strip(" ?")
-                if requested.startswith("on "):
-                    requested = requested[3:]
-                if requested and len(requested) < 30:
-                    return f"I don't recognise '{requested}' as a category in this repository."
-            known_category_present = any(category.lower() in spent_categories for category in categories)
-            if any(word in lowered for word in ["rent", "groceries", "takeaway", "transport",
-                                                "food", "bills", "entertainment", "going out"]):
-                unknown = next((word for word in ["rent", "groceries", "takeaway", "transport",
-                                                   "food", "bills", "entertainment", "going out"]
-                                if word in lowered), "that category")
-                if unknown not in {"rent", "food", "bills", "entertainment", "going out"}:
-                    return f"I don't recognise '{unknown}' as a category in this repository."
-            if "category" in lowered or known_category_present:
-                return "I don't recognise that category in the repository."
-            total = float(subset["amount"].sum())
-            return f"You spent £{total:.2f}."
-        if "why" in lowered or "expensive" in lowered:
+        lowered = question.casefold()
+        requested_month = self._requested_month(lowered, frame)
+
+        if self._contains_term(lowered, "why") or self._contains_term(
+            lowered, "expensive"
+        ):
+            if requested_month is not None:
+                return self._explain_month(frame, requested_month)
             anomalies = self.insight_engine.category_anomalies(self.transactions)
-            return " ".join(anomalies) if anomalies else "No unusual category spending was detected."
-        if "top merchant" in lowered or "top merchants" in lowered:
-            totals = frame.groupby("merchant_clean")["amount"].sum().sort_values(ascending=False)
-            names = ", ".join(f"{name} (£{amount:.2f})"
-                              for name, amount in totals.head(3).items())
+            return (
+                " ".join(anomalies)
+                if anomalies else "No unusual category spending was detected."
+            )
+        if self._contains_term(lowered, "compare") or self._contains_term(
+            lowered, "versus"
+        ) or re.search(r"\bvs\.?\b", lowered):
+            return self._compare_complete_months(frame)
+        if self._contains_term(lowered, "top merchant") or self._contains_term(
+            lowered, "top merchants"
+        ):
+            totals = frame.groupby("merchant_clean")["amount"].sum().nlargest(3)
+            names = ", ".join(
+                f"{name} (£{amount:.2f})" for name, amount in totals.items()
+            )
             return f"Your top merchants are: {names}."
-        if "month" in lowered and ("compare" in lowered or "vs" in lowered):
-            frame["month"] = pd.to_datetime(frame["timestamp"]).dt.to_period("M").astype(str)
-            totals = frame.groupby("month")["amount"].sum()
-            if len(totals) < 2:
-                return "There is not enough data to compare two months."
-            previous, latest = totals.index[-2], totals.index[-1]
-            return (f"{latest} spending was £{totals.iloc[-1]:.2f}; "
-                    f"{previous} spending was £{totals.iloc[-2]:.2f}.")
+        if self._contains_term(lowered, "how much") or self._contains_term(
+            lowered, "spent"
+        ):
+            return self._answer_spending(frame, lowered, requested_month)
         return "I can explain spending by category, compare your months, or list top merchants."
+
+    def _answer_spending(
+        self, frame: pd.DataFrame, question: str, month: pd.Period | None
+    ) -> str:
+        """Filter totals by a merchant, category, and optional requested month."""
+        subset = frame
+        if month is not None:
+            subset = subset[subset["period"] == month]
+        merchant = self._matched_merchant(question, frame)
+        categories = self._matched_categories(question, frame)
+        if merchant:
+            subset = subset[subset["merchant_clean"] == merchant]
+        if categories:
+            subset = subset[subset["category"].isin(categories)]
+        if not merchant and not categories:
+            target = self._spending_target(question)
+            if target and target not in MONTH_NUMBERS and not re.fullmatch(
+                r"(?:19|20)\d{2}", target
+            ):
+                return f"I don't recognise '{target}' as a category or merchant in this repository."
+        if subset.empty:
+            return "There is no spending data for that period and filter."
+        total = float(subset["amount"].sum())
+        if merchant:
+            label = merchant
+        elif categories:
+            label = " + ".join(categories)
+        else:
+            label = "overall"
+        partial_label = (
+            f" ({month.strftime('%B %Y')} is partial)"
+            if month is not None and self._is_partial_month(month) else ""
+        )
+        if label == "overall":
+            return f"You spent £{total:.2f}{partial_label}."
+        return f"You spent £{total:.2f} on {label}{partial_label}."
+
+    def _compare_complete_months(self, frame: pd.DataFrame) -> str:
+        """Compare the last two complete calendar months, excluding the current one."""
+        current = pd.Period(self.now, freq="M")
+        periods = sorted(
+            period for period in frame["period"].unique() if period < current
+        )
+        if len(periods) < 2:
+            return "There is not enough complete-month data to compare two months."
+        previous, latest = periods[-2:]
+        totals = frame.groupby("period")["amount"].sum()
+        partial_label = (
+            f" {self.now.strftime('%B %Y')} is partial and excluded."
+            if (frame["period"] == current).any() else ""
+        )
+        return (
+            f"{latest.strftime('%B %Y')} spending was £{totals[latest]:.2f}; "
+            f"{previous.strftime('%B %Y')} spending was £{totals[previous]:.2f}."
+            f"{partial_label}"
+        )
+
+    def _explain_month(self, frame: pd.DataFrame, month: pd.Period) -> str:
+        """Compare a named month with its predecessor by category."""
+        previous = month - 1
+        current_rows = frame[frame["period"] == month]
+        previous_rows = frame[frame["period"] == previous]
+        if current_rows.empty or previous_rows.empty:
+            return (
+                f"There is not enough data to compare {month.strftime('%B %Y')} "
+                f"with {previous.strftime('%B %Y')}."
+            )
+        current_totals = current_rows.groupby("category")["amount"].sum()
+        previous_totals = previous_rows.groupby("category")["amount"].sum()
+        categories = sorted(set(current_totals.index) | set(previous_totals.index))
+        changes = [
+            (
+                category,
+                float(current_totals.get(category, 0.0))
+                - float(previous_totals.get(category, 0.0)),
+            )
+            for category in categories
+        ]
+        increases = sorted(
+            (item for item in changes if item[1] > 0),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if not increases:
+            return (
+                f"{month.strftime('%B %Y')} did not cost more than "
+                f"{previous.strftime('%B %Y')} by category."
+            )
+        detail = "; ".join(
+            f"{category} +£{amount:.2f}" for category, amount in increases
+        )
+        return (
+            f"{month.strftime('%B %Y')} compared with "
+            f"{previous.strftime('%B %Y')}: {detail}."
+        )
 
     def chart_for(self, question: str) -> object | None:
         """Return an optional grounded Plotly chart for common queries."""
         import plotly.express as px
-        if not self.transactions:
+
+        frame = self._frame()
+        if frame.empty:
             return None
-        frame = pd.DataFrame([vars(transaction) for transaction in self.transactions])
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"])
-        lowered = question.lower()
-        if "merchant" in lowered:
-            totals = frame.groupby("merchant_clean")["amount"].sum().nlargest(5).reset_index()
+        lowered = question.casefold()
+        if self._contains_term(lowered, "merchant") or self._contains_term(
+            lowered, "merchants"
+        ):
+            totals = (
+                frame.groupby("merchant_clean")["amount"]
+                .sum().nlargest(5).reset_index()
+            )
             return px.bar(totals, x="merchant_clean", y="amount", title="Top merchants")
-        categories = frame["category"].dropna().astype(str).unique().tolist()
-        matched_categories = [
-            category for category in categories if category.casefold() in lowered
-        ]
-        category_synonyms = {
-            "food": ["Groceries", "Eating Out", "Takeaways"],
-            "rent": ["Rent & Bills"],
-            "bills": ["Rent & Bills", "Subscriptions"],
-            "going out": ["Entertainment"],
-        }
-        for synonym, names in category_synonyms.items():
-            if synonym in lowered:
-                matched_categories.extend(
-                    category for category in names if category in categories
-                )
-        matched_categories = list(dict.fromkeys(matched_categories))
-        if matched_categories:
-            frame = frame[frame["category"].isin(matched_categories)]
-            title = f"{' + '.join(matched_categories)} spending by month"
+        merchants = self._matched_merchant(lowered, frame)
+        categories = self._matched_categories(lowered, frame)
+        if merchants:
+            frame = frame[frame["merchant_clean"] == merchants]
+        if categories:
+            frame = frame[frame["category"].isin(categories)]
+        if categories:
+            title = f"{' + '.join(categories)} spending by month"
+        elif merchants:
+            title = f"{merchants} spending by month"
         else:
             title = "Monthly spending"
-        if "month" in lowered or "how much" in lowered or "spent" in lowered:
-            frame["month"] = frame["timestamp"].dt.to_period("M").astype(str)
-            totals = frame.groupby("month", as_index=False)["amount"].sum()
-            if len(totals):
-                return px.bar(totals, x="month", y="amount", title=title)
-        return None
+        totals = frame.groupby("period", as_index=False)["amount"].sum()
+        if totals.empty:
+            return None
+        totals["period"] = totals["period"].astype(str)
+        return px.bar(totals, x="period", y="amount", title=title)
+
+    def _frame(self) -> pd.DataFrame:
+        """Build a chronological dataframe with monthly periods."""
+        frame = pd.DataFrame([vars(item) for item in self.transactions])
+        if frame.empty:
+            return frame
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"])
+        frame["period"] = frame["timestamp"].dt.to_period("M")
+        return frame.sort_values("timestamp")
+
+    def _requested_month(
+        self, question: str, frame: pd.DataFrame
+    ) -> pd.Period | None:
+        """Resolve a month name to the latest matching data period or explicit year."""
+        if self._contains_term(question, "last month"):
+            return pd.Period(self.now, freq="M") - 1
+        if self._contains_term(question, "this month"):
+            return pd.Period(self.now, freq="M")
+        requested_name = next(
+            (
+                name for name in MONTH_NUMBERS
+                if self._contains_term(question, name)
+            ),
+            None,
+        )
+        if requested_name is None:
+            return None
+        year_match = re.search(r"\b(?:19|20)\d{2}\b", question)
+        matching = [
+            period for period in frame["period"].unique()
+            if period.month == MONTH_NUMBERS[requested_name]
+        ]
+        if year_match:
+            requested = pd.Period(
+                year=int(year_match.group()),
+                month=MONTH_NUMBERS[requested_name],
+                freq="M",
+            )
+            return requested if requested in matching else None
+        return max(matching) if matching else None
+
+    def _matched_merchant(self, question: str, frame: pd.DataFrame) -> str | None:
+        """Find the longest merchant name occurring at a word boundary."""
+        merchants = sorted(
+            frame["merchant_clean"].dropna().astype(str).unique(),
+            key=len,
+            reverse=True,
+        )
+        return next(
+            (name for name in merchants if self._contains_term(question, name)),
+            None,
+        )
+
+    @classmethod
+    def _matched_categories(
+        cls, question: str, frame: pd.DataFrame
+    ) -> list[str]:
+        """Match category names and synonyms without substring collisions."""
+        categories = [
+            str(item) for item in frame["category"].dropna().unique()
+        ]
+        matched = [
+            category for category in categories
+            if cls._contains_term(question, category)
+        ]
+        for synonym, category_names in CATEGORY_SYNONYMS.items():
+            if cls._contains_term(question, synonym):
+                matched.extend(
+                    category for category in category_names
+                    if category in categories
+                )
+        return list(dict.fromkeys(matched))
+
+    def _spending_target(self, question: str) -> str:
+        """Extract a potential category or merchant filter from a spending query."""
+        match = re.search(
+            r"\bon\s+(.+?)(?=\s+\b(?:in|during|for)\b|[?.!]|$)", question
+        )
+        if not match:
+            return ""
+        target = match.group(1).strip()
+        for month in MONTH_NUMBERS:
+            target = re.sub(rf"\b{month}\b", "", target)
+        target = re.sub(r"\b(?:19|20)\d{2}\b", "", target).strip()
+        return target
+
+    def _is_partial_month(self, period: pd.Period) -> bool:
+        """Report current-month data as partial until its final calendar day."""
+        current = pd.Period(self.now, freq="M")
+        return (
+            period == current
+            and self.now.day < calendar.monthrange(self.now.year, self.now.month)[1]
+        )
 
     @staticmethod
-    def _month_filter(frame: pd.DataFrame, lowered: str) -> pd.DataFrame | None:
-        """Apply last-month or named-month filters without inventing values."""
-        now = datetime.now()
-        if "last month" in lowered:
-            year = now.year
-            month = now.month - 1
-            if month == 0:
-                year -= 1
-                month = 12
-            return frame[(frame["timestamp"].dt.year == year)
-                         & (frame["timestamp"].dt.month == month)]
-        month_names = {
-            "january": 1, "february": 2, "march": 3, "april": 4,
-            "may": 5, "june": 6, "july": 7, "august": 8,
-            "september": 9, "october": 10, "november": 11, "december": 12,
-        }
-        for name, month in month_names.items():
-            if name in lowered:
-                year = now.year
-                return frame[(frame["timestamp"].dt.year == year)
-                             & (frame["timestamp"].dt.month == month)]
-        return None
+    def _contains_term(text: str, term: str) -> bool:
+        """Match a word or phrase without matching it inside a larger word."""
+        escaped = re.escape(term.casefold())
+        return re.search(rf"(?<!\w){escaped}(?!\w)", text.casefold()) is not None

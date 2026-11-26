@@ -27,28 +27,57 @@ def test_rent_unknown_category_and_month_filters() -> None:
         Transaction(None, datetime(2026, 9, 10), 10.0, "Tesco", "Tesco",
                     "Birmingham", "Groceries"),
     ]
-    advisor = Advisor(transactions)
+    advisor = Advisor(transactions, now=datetime(2026, 11, 26))
     assert "£650.00" in advisor.answer("How much did I spend on rent?")
     assert "October" not in advisor.answer("How much did I spend on October?")
     assert "don't recognise" in advisor.answer("How much did I spend on antiques?")
     assert "£675.00" in advisor.answer("How much did I spend in October?")
 
 
-def test_advisor_llm_mock_stays_grounded() -> None:
-    """A mocked LLM adapter receives repository-grounded text and can fail safely."""
+def test_advisor_uses_word_boundaries_and_resolves_named_months() -> None:
+    """Merchant/category terms are bounded and named months choose the latest data."""
     transactions = [
-        Transaction(None, datetime(2026, 10, 5), 650.0, "Rent", "Rent",
+        Transaction(None, datetime(2025, 10, 5), 10.0, "Rent", "Rent",
                     "Birmingham", "Rent & Bills"),
+        Transaction(None, datetime(2026, 9, 5), 20.0, "Tesco", "Tesco",
+                    "Birmingham", "Groceries"),
+        Transaction(None, datetime(2026, 10, 5), 30.0, "Tesco", "Tesco",
+                    "Birmingham", "Groceries"),
+        Transaction(None, datetime(2026, 10, 8), 40.0, "Rail", "Rail",
+                    "Birmingham", "Transport"),
+        Transaction(None, datetime(2026, 11, 5), 50.0, "Tesco", "Tesco",
+                    "Birmingham", "Groceries"),
     ]
-    class Tool:
-        @staticmethod
-        def answer(question: str, grounded_answer: str) -> str:
-            return grounded_answer
-    class MockLLM:
-        tools = Tool()
-    assert "£650.00" in Advisor(transactions, MockLLM()).answer_with_llm(
-        "How much did I spend on rent?"
+    advisor = Advisor(transactions, now=datetime(2026, 11, 15))
+
+    assert "£70.00" in advisor.answer("How much did I spend in October?")
+    assert "£10.00" in advisor.answer("How much did I spend in October 2025?")
+    assert "£100.00" in advisor.answer("How much on Tesco?")
+    assert "don't recognise 'current account'" in advisor.answer(
+        "How much did I spend on current account?"
     )
+    assert "November 2026 is partial" in advisor.answer("How much in November?")
+
+
+def test_advisor_month_comparison_and_why_explain_categories_in_gbp() -> None:
+    """Complete-month comparisons exclude a partial month and explain category deltas."""
+    transactions = [
+        Transaction(None, datetime(2026, 9, 5), 100.0, "A", "A", None, "Groceries"),
+        Transaction(None, datetime(2026, 9, 8), 50.0, "B", "B", None, "Transport"),
+        Transaction(None, datetime(2026, 10, 5), 150.0, "A", "A", None, "Groceries"),
+        Transaction(None, datetime(2026, 10, 8), 50.0, "B", "B", None, "Transport"),
+        Transaction(None, datetime(2026, 11, 5), 900.0, "C", "C", None, "Shopping"),
+    ]
+    advisor = Advisor(transactions, now=datetime(2026, 11, 15))
+
+    comparison = advisor.answer("Compare my months")
+    explanation = advisor.answer("Why was October expensive?")
+
+    assert "October 2026 spending was £200.00" in comparison
+    assert "September 2026 spending was £150.00" in comparison
+    assert "November 2026 is partial and excluded" in comparison
+    assert "Groceries +£50.00" in explanation
+    assert "October 2026 compared with September 2026" in explanation
 
 
 def test_chart_for_monthly_category_and_merchant_questions() -> None:

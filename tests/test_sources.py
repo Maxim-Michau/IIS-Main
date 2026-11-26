@@ -1,6 +1,7 @@
 """Tests for bank data sources."""
 
 from datetime import date
+from collections import Counter
 
 from expense_ai.sources.synthetic import SyntheticBankSource
 from expense_ai.sources.open_banking import OpenBankingSource
@@ -18,6 +19,33 @@ def test_synthetic_source_is_reproducible() -> None:
     assert any(row.true_category == "Rent & Bills" for row in first)
     assert min(row.timestamp.date() for row in first) == date(2026, 1, 1)
     assert max(row.timestamp.date() for row in first) == fixed_end
+    assert [row.timestamp for row in first] == sorted(row.timestamp for row in first)
+
+    entertainment_mccs = {
+        row.mcc for row in first
+        if row.true_category == "Entertainment" and row.mcc
+    }
+    food_mccs = {
+        row.mcc for row in first
+        if row.true_category in {"Eating Out", "Takeaways"} and row.mcc
+    }
+    assert entertainment_mccs
+    assert food_mccs
+    assert entertainment_mccs.isdisjoint(food_mccs)
+    marketplaces = [
+        row for row in first
+        if row.merchant_clean in {"Amazon", "paypal unknown"}
+    ]
+    assert any(row.mcc is None for row in marketplaces)
+    assert {
+        row.mcc for row in marketplaces if row.mcc
+    } <= {"5999", "4829"}
+
+    location_counts = Counter(row.location for row in first if row.location)
+    assert location_counts["Birmingham"] == max(location_counts.values())
+    assert set(location_counts) <= {
+        "Birmingham", "Coventry", "Solihull", "Manchester", "London", "Liverpool"
+    }
 
 
 def test_synthetic_source_defaults_to_today() -> None:

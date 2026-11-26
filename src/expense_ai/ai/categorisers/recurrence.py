@@ -11,6 +11,12 @@ from sqlalchemy.orm import Session
 from expense_ai.ai.categorisers.base import Categoriser
 from expense_ai.models.transaction import Prediction, Transaction
 from expense_ai.storage.database import transactions_table
+from config.settings import (
+    RECURRENCE_AMOUNT_TOLERANCE,
+    RECURRENCE_GAP_TOLERANCE_DAYS,
+    RECURRENCE_MIN_REGULARITY,
+    RECURRENCE_SUGGESTION_CONFIDENCE,
+)
 
 
 @dataclass(frozen=True)
@@ -46,9 +52,10 @@ class RecurrenceDetector(Categoriser):
 
         amounts = [item.amount for item in matching]
         typical_amount = float(median(amounts))
-        amounts_regular = all(
-            abs(amount - typical_amount) <= typical_amount * 0.15 for amount in amounts
-        )
+        amounts_regular = sum(
+            abs(amount - typical_amount) <= typical_amount * RECURRENCE_AMOUNT_TOLERANCE
+            for amount in amounts
+        ) / count >= RECURRENCE_MIN_REGULARITY
         gaps = [
             (right.timestamp.date() - left.timestamp.date()).days
             for left, right in zip(matching, matching[1:])
@@ -56,10 +63,12 @@ class RecurrenceDetector(Categoriser):
         median_gap = float(median(gaps))
         nearest = min(self.INTERVALS, key=lambda item: abs(item[0] - median_gap))
         days, interval = nearest
-        gaps_regular = all(abs(gap - days) <= 3 for gap in gaps)
+        gaps_regular = sum(
+            abs(gap - days) <= RECURRENCE_GAP_TOLERANCE_DAYS for gap in gaps
+        ) / len(gaps) >= RECURRENCE_MIN_REGULARITY
         borderline = (
             amounts_regular
-            and abs(median_gap - days) <= 6
+            and abs(median_gap - days) <= RECURRENCE_GAP_TOLERANCE_DAYS * 2
             and not gaps_regular
         )
         return RecurrenceResult(
@@ -72,14 +81,15 @@ class RecurrenceDetector(Categoriser):
 
     def categorise(self, transaction: Transaction) -> Prediction:
         result = self.detect(transaction)
+        transaction.is_recurring = result.is_recurring
         if result.is_recurring:
             return Prediction(
                 "Subscriptions",
-                0.82,
+                RECURRENCE_SUGGESTION_CONFIDENCE,
                 f"{result.count} similar payments occur about every {result.interval}.",
-                "CONTEXT",
+                "RECURRENCE",
             )
-        return Prediction("Other", 0.20, "No regular payment pattern detected.", "CONTEXT")
+        return Prediction("Other", 0.20, "No regular payment pattern detected.", "RECURRENCE")
 
     def _merchant_history(self, transaction: Transaction) -> list[Transaction]:
         if self.engine is None:

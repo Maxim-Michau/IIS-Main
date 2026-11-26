@@ -43,7 +43,8 @@ if not transactions:
     st.warning("The database is empty. Generate the reproducible synthetic demo to get started.")
     if st.button("Generate synthetic data"):
         from expense_ai.sources.synthetic import SyntheticBankSource
-        service.ingest_all(SyntheticBankSource().fetch_transactions())
+        with st.spinner("Generating and categorising synthetic transactions..."):
+            service.ingest_all(SyntheticBankSource().fetch_transactions())
         st.cache_resource.clear()
         st.rerun()
 else:

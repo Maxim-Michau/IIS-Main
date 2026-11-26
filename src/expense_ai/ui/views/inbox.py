@@ -22,16 +22,26 @@ def render(service: object) -> None:
     if message:
         st.success(message)
         st.toast(message)
+    if service.get_last_category_action() and st.button("Undo last category answer"):
+        if service.undo_category_change():
+            st.info("Last category answer undone.")
+            st.rerun()
 
     questions = service.get_pending_questions()
+    queued_count = service.get_queued_question_count()
+    if queued_count:
+        st.info(f"{queued_count} more questions queued.")
+        if st.button("Release next batch (ignores daily cap)"):
+            service.release_next_question_batch()
+            st.rerun()
     if not questions:
         st.success("No pending questions.")
         return
     transactions = service.get_transactions()
+    category_options = list(dict.fromkeys(
+        CATEGORIES + [transaction.category for transaction in transactions]
+    ))
     by_id = {transaction.id: transaction for transaction in transactions}
-    usual_locations = Counter(
-        transaction.location for transaction in transactions if transaction.location
-    )
     by_merchant: dict[str, list[dict[str, object]]] = defaultdict(list)
     for question in questions:
         transaction = by_id.get(question["transaction_id"])
@@ -65,7 +75,16 @@ def render(service: object) -> None:
                 key=lambda item: item.timestamp,
                 reverse=True,
             )
-            locations = Counter(item.location for item in previous if item.location)
+            location_question_ids = {
+                question["transaction_id"]
+                for question in merchant_questions
+                if question["question_type"] == "LOCATION"
+            }
+            locations = Counter(
+                item.location
+                for item in merchant_transactions
+                if item.location and item.id not in location_question_ids
+            )
             weekdays = Counter(item.timestamp.strftime("%A") for item in previous)
             if previous:
                 st.markdown("**Your previous transactions at this merchant**")
@@ -107,9 +126,11 @@ def render(service: object) -> None:
                 question_id = question["id"]
                 st.markdown(f"**{question['prompt_text']}**")
                 if question_type == "CATEGORY":
-                    _category_controls(service, question_id, grouped_questions)
+                    _category_controls(
+                        service, question_id, grouped_questions, category_options
+                    )
                 elif question_type == "LOCATION":
-                    _location_controls(service, question_id, usual_locations)
+                    _location_controls(service, question_id, locations)
                 else:
                     options = list(dict.fromkeys(
                         option for item in grouped_questions
@@ -137,20 +158,22 @@ def _category_controls(
     service: object,
     question_id: int,
     questions: list[dict[str, object]],
+    categories: list[str],
 ) -> None:
     suggestions = list(dict.fromkeys(
         option for question in questions
         for option in str(question["options"] or "").split("|")
-        if option and option in CATEGORIES
+        if option
     ))[:3]
     for index, category in enumerate(suggestions):
         if st.button(category, key=f"q-{question_id}-category-button-{index}"):
             _answer(service, question_id, category)
             st.rerun()
 
+    categories = list(dict.fromkeys(categories + suggestions))
     selected = st.selectbox(
         "All categories",
-        CATEGORIES,
+        categories,
         key=f"q-{question_id}-category-select-{len(suggestions)}",
     )
     custom = st.text_input(
