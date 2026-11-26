@@ -1,6 +1,7 @@
 """Tests for context-based and fuzzy categorisation methods."""
 
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 from expense_ai.ai.categorisers.base import Categoriser
 from expense_ai.ai.categorisers.context import ContextCategoriser
@@ -38,6 +39,34 @@ def test_fuzzy_categoriser_uses_confirmed_merchant_history(engine) -> None:
     assert prediction.category == "Groceries"
     assert prediction.method == "FUZZY"
     assert prediction.confidence_score >= categoriser.threshold
+
+
+def test_history_categorisers_cache_database_lookups_per_batch(engine) -> None:
+    """Context, fuzzy, and learned-rule history are queried once per batch."""
+    repository = TransactionRepository(engine)
+    repository.add(make_transaction(
+        "Fresh Market", category="Groceries", status="CONFIRMED"
+    ))
+    categorisers = [
+        (ContextCategoriser(engine), "_query_confirmed_history", "_confirmed_history"),
+        (
+            FuzzyMerchantCategoriser(engine),
+            "_query_confirmed_merchants",
+            "_confirmed_merchants",
+        ),
+        (RuleCategoriser(engine=engine), "_query_learned_rules", "_learned_rules"),
+    ]
+
+    for categoriser, query_name, cached_name in categorisers:
+        query = getattr(categoriser, query_name)
+        with patch.object(categoriser, query_name, wraps=query) as query_spy:
+            categoriser.begin_batch()
+            getattr(categoriser, cached_name)()
+            getattr(categoriser, cached_name)()
+            assert query_spy.call_count == 1
+            categoriser.end_batch()
+            getattr(categoriser, cached_name)()
+            assert query_spy.call_count == 2
 
 
 def test_context_categoriser_combines_mcc_and_late_night_signals() -> None:

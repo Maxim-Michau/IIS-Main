@@ -37,6 +37,15 @@ class ContextCategoriser(Categoriser):
 
     def __init__(self, engine: Engine | None = None) -> None:
         self.engine = engine
+        self._history_cache: list[Transaction] | None = None
+
+    def begin_batch(self) -> None:
+        """Cache confirmed history for one ingestion batch."""
+        self._history_cache = self._query_confirmed_history()
+
+    def end_batch(self) -> None:
+        """Release history cached for the completed ingestion batch."""
+        self._history_cache = None
 
     def categorise(self, transaction: Transaction) -> Prediction:
         mcc_category = MCC_CATEGORIES.get(transaction.mcc or "")
@@ -84,6 +93,11 @@ class ContextCategoriser(Categoriser):
         return Prediction(category, confidence, f"Context signals: {evidence}.", "CONTEXT")
 
     def _confirmed_history(self) -> list[Transaction]:
+        if self._history_cache is not None:
+            return self._history_cache
+        return self._query_confirmed_history()
+
+    def _query_confirmed_history(self) -> list[Transaction]:
         if self.engine is None:
             return []
         with Session(self.engine) as session:

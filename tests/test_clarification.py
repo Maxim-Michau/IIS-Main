@@ -10,6 +10,7 @@ from expense_ai.storage.database import questions_table, transactions_table
 from expense_ai.services.app_service import AppService
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+import pytest
 
 
 def test_threshold_decisions(engine) -> None:
@@ -20,6 +21,14 @@ def test_threshold_decisions(engine) -> None:
     assert clarification.decide(transaction, Prediction("Groceries", 0.90, "Test", "RULE")) == "AUTO"
     assert clarification.decide(transaction, Prediction("Groceries", 0.70, "Test", "ML")) == "TENTATIVE"
     assert clarification.decide(transaction, Prediction("Other", 0.40, "Test", "ML")) == "ASK"
+
+
+def test_settings_reject_auto_threshold_not_above_question_threshold(engine) -> None:
+    """Clarification configuration enforces the threshold ordering invariant."""
+    service = AppService(engine, CategorisationPipeline([]))
+
+    with pytest.raises(ValueError, match="must exceed"):
+        service.configure_clarification(0.5, 0.5, 5)
 
 
 def test_daily_question_cap(engine) -> None:
@@ -151,3 +160,74 @@ def test_bulk_ingestion_surfaces_only_the_daily_cap(engine) -> None:
 
     assert len(service.get_pending_questions()) == service.clarification.max_questions_per_day
     assert service.get_queued_question_count() == 200 - service.clarification.max_questions_per_day
+
+
+def test_location_question_uses_merchant_history_and_targets_one_transaction(engine) -> None:
+    """Unusual locations use merchant history, and answers affect only the asked row."""
+    service = AppService(engine, CategorisationPipeline([]))
+    repository = service.repository
+    repository.add(Transaction(
+        None, datetime(2026, 11, 1), 20.0, "TESCO", "Tesco", "Cambridge",
+        category="Groceries",
+    ))
+    repository.add(Transaction(
+        None, datetime(2026, 11, 2), 20.0, "OTHER", "Other", "Leeds",
+        category="Shopping",
+    ))
+    target = repository.add(Transaction(
+        None, datetime(2026, 11, 3), 20.0, "TESCO", "Tesco", "Leeds",
+        category="Groceries",
+    ))
+    untouched = repository.add(Transaction(
+        None, datetime(2026, 11, 4), 20.0, "TESCO", "Tesco", "Cambridge",
+        category="Groceries",
+    ))
+    service.clarification.location_question(target)
+    with Session(engine) as session:
+        question = session.execute(
+            select(questions_table).where(
+                questions_table.c.transaction_id == target.id,
+                questions_table.c.question_type == "LOCATION",
+            )
+        ).mappings().one()
+        assert question["status"] == "QUEUED"
+        assert question["options"] == "Cambridge"
+        assert "previous payments were in Cambridge" in question["prompt_text"]
+        session.execute(
+            questions_table.update().where(
+                questions_table.c.id == question["id"]
+            ).values(status="PENDING")
+        )
+        session.commit()
+
+    service.answer_question(question["id"], "Leeds")
+
+    assert repository.get(target.id).location == "Leeds"
+    assert repository.get(untouched.id).location == "Cambridge"
+
+
+def test_extra_info_requires_large_unknown_category(engine) -> None:
+    """Extra-info questions are limited to large transactions without a category."""
+    clarification = ClarificationEngine(engine)
+    categorized = Transaction(
+        None, datetime.now(), 250.0, "KNOWN", "Known", None, category="Shopping"
+    )
+    categorized.id = 1
+    small_unknown = Transaction(
+        None, datetime.now(), 99.0, "SMALL", "Small", None, category="Other"
+    )
+    small_unknown.id = 2
+    large_unknown = Transaction(
+        None, datetime.now(), 250.0, "UNKNOWN", "Unknown", None, category="Other"
+    )
+    large_unknown.id = 3
+
+    clarification.extra_info_question(categorized)
+    clarification.extra_info_question(small_unknown)
+    clarification.extra_info_question(large_unknown)
+
+    with Session(engine) as session:
+        rows = session.execute(
+            select(questions_table.c.transaction_id, questions_table.c.question_type)
+        ).all()
+    assert rows == [(3, "EXTRA_INFO")]

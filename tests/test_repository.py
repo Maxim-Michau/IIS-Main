@@ -7,9 +7,10 @@ from expense_ai.services.app_service import AppService
 from expense_ai.ai.pipeline import CategorisationPipeline
 from expense_ai.ai.categorisers.rule import RuleCategoriser
 from expense_ai.storage.database import (
-    activity_log_table, feedback_table, questions_table, merchant_rules_table,
+    activity_log_table, budgets_table, feedback_table, insights_table, metadata,
+    questions_table, merchant_rules_table, transactions_table,
 )
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.orm import Session
 
 
@@ -206,3 +207,72 @@ def test_manual_category_correction_uses_learning_path_and_validates(engine) -> 
     ))
     assert prediction.category == "Groceries"
     assert prediction.method == "LEARNED"
+
+
+def test_reset_demo_data_clears_all_tables_and_model(engine, tmp_path) -> None:
+    """Reset removes every persisted record and the configured model file."""
+    model_path = tmp_path / "categoriser.joblib"
+    model_path.write_bytes(b"model")
+    service = AppService(
+        engine, CategorisationPipeline([]), model_path=model_path
+    )
+    with Session(engine) as session:
+        transaction_id = session.execute(insert(transactions_table).values(
+            timestamp=datetime(2026, 11, 1),
+            amount=10.0,
+            merchant_raw="TESCO",
+            merchant_clean="Tesco",
+            category="Groceries",
+            confidence_score=1.0,
+            status="CONFIRMED",
+            source="TEST",
+            method="USER",
+            is_recurring=False,
+        )).inserted_primary_key[0]
+        session.execute(insert(questions_table).values(
+            transaction_id=transaction_id,
+            question_type="CATEGORY",
+            prompt_text="Category?",
+            status="ANSWERED",
+        ))
+        session.execute(insert(feedback_table).values(
+            transaction_id=transaction_id,
+            predicted_category="Other",
+            chosen_category="Groceries",
+            merchant_clean="Tesco",
+            created_at=datetime(2026, 11, 1),
+        ))
+        session.execute(insert(budgets_table).values(
+            category="Groceries", monthly_limit=100.0, month="2026-11"
+        ))
+        session.execute(insert(merchant_rules_table).values(
+            pattern="tesco",
+            category="Groceries",
+            origin="LEARNED",
+            times_confirmed=1,
+        ))
+        session.execute(insert(insights_table).values(
+            title="Save more",
+            explanation="A test insight",
+            estimated_monthly_saving=10.0,
+            status="PENDING",
+        ))
+        session.execute(insert(activity_log_table).values(
+            transaction_id=transaction_id,
+            event_type="ANSWER",
+            message="Confirmed category",
+            created_at=datetime(2026, 11, 1),
+        ))
+        session.commit()
+
+    service.reset_demo_data()
+
+    assert not model_path.exists()
+    with Session(engine) as session:
+        counts = {
+            table.name: session.execute(
+                select(func.count()).select_from(table)
+            ).scalar_one()
+            for table in metadata.sorted_tables
+        }
+    assert all(count == 0 for count in counts.values()), counts

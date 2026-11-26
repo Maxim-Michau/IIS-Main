@@ -1,11 +1,13 @@
 """SQLAlchemy database setup."""
 
+import logging
+
 from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
-                        DateTime, Text, create_engine)
-from sqlalchemy.orm import registry
+                        DateTime, Text, create_engine, inspect)
 from config.settings import DATABASE_PATH, DATABASE_URL
 
 
+logger = logging.getLogger(__name__)
 metadata = MetaData()
 transactions_table = Table(
     "transactions", metadata,
@@ -92,17 +94,15 @@ def create_database(database_url: str = DATABASE_URL) -> object:
         database_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(database_url)
     metadata.create_all(engine)
-    if database_url != "sqlite://":
+    budget_columns = {
+        column["name"] for column in inspect(engine).get_columns("budgets")
+    }
+    if "month" not in budget_columns:
         with engine.begin() as connection:
-            try:
-                columns = connection.exec_driver_sql("PRAGMA table_info(budgets)").fetchall()
-                names = {row[1] for row in columns}
-                if "month" not in names:
-                    connection.exec_driver_sql(
-                        "ALTER TABLE budgets ADD COLUMN month TEXT NOT NULL DEFAULT '1970-01'"
-                    )
-            except Exception:
-                pass
+            connection.exec_driver_sql(
+                "ALTER TABLE budgets ADD COLUMN month VARCHAR NOT NULL DEFAULT '1970-01'"
+            )
+        logger.info("Added missing budgets.month column.")
     if engine.dialect.name == "sqlite":
         with engine.begin() as connection:
             columns = {

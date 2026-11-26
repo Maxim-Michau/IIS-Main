@@ -48,6 +48,8 @@ class AppService:
     def configure_clarification(self, auto_threshold: float, ask_threshold: float,
                                 max_questions_per_day: int) -> None:
         """Apply live thresholds to subsequent ingestion."""
+        if auto_threshold <= ask_threshold:
+            raise ValueError("Auto-accept threshold must exceed question threshold.")
         self.clarification.auto_threshold = auto_threshold
         self.clarification.ask_threshold = ask_threshold
         self.clarification.max_questions_per_day = max_questions_per_day
@@ -83,10 +85,22 @@ class AppService:
 
     def ingest_all(self, transactions: Iterable[Transaction]) -> list[Transaction]:
         """Ingest a collection of transactions."""
-        ingested = [
-            self.ingest(transaction, release_questions=False)
-            for transaction in transactions
-        ]
+        batch_cleanup = []
+        for categoriser in self.pipeline.categorisers:
+            begin_batch = getattr(categoriser, "begin_batch", None)
+            if callable(begin_batch):
+                begin_batch()
+                end_batch = getattr(categoriser, "end_batch", None)
+                if callable(end_batch):
+                    batch_cleanup.append(end_batch)
+        try:
+            ingested = [
+                self.ingest(transaction, release_questions=False)
+                for transaction in transactions
+            ]
+        finally:
+            for cleanup in batch_cleanup:
+                cleanup()
         if self.enable_ml_training:
             self.train_ml_if_ready()
         self.clarification.release_questions()
@@ -171,6 +185,19 @@ class AppService:
             session.commit()
         return result.rowcount > 0
 
+    def reset_demo_data(self) -> None:
+        """Clear every application table and remove the persisted ML model."""
+        from config.settings import MODEL_PATH
+        from expense_ai.storage.database import metadata
+
+        with Session(self.repository.engine) as session:
+            for table in reversed(metadata.sorted_tables):
+                session.execute(delete(table))
+            session.commit()
+        model_path = Path(self.model_path or MODEL_PATH)
+        if model_path.exists():
+            model_path.unlink()
+
     def get_budgets(self, month: str) -> dict[str, float]:
         """Return recurring defaults overridden by budgets for the requested month."""
         with Session(self.repository.engine) as session:
@@ -214,7 +241,12 @@ class AppService:
             if transaction_row is None:
                 return None
             is_category = question["question_type"] == "CATEGORY"
-            if not is_category:
+            is_location = question["question_type"] == "LOCATION"
+            if is_location:
+                merchant_questions = [
+                    (question["id"], question["transaction_id"])
+                ]
+            elif not is_category:
                 merchant_questions = session.execute(
                     select(questions_table.c.id, questions_table.c.transaction_id)
                     .join(

@@ -8,7 +8,8 @@ from sqlalchemy.engine import Engine
 from expense_ai.models.transaction import Prediction, Transaction
 from expense_ai.storage.database import questions_table, transactions_table
 from config.settings import (AUTO_ACCEPT_THRESHOLD, ASK_THRESHOLD,
-                             MAX_QUESTIONS_PER_DAY, QUESTION_TYPE_WEIGHTS)
+                             EXTRA_INFO_MIN_AMOUNT, MAX_QUESTIONS_PER_DAY,
+                             QUESTION_TYPE_WEIGHTS)
 
 
 class ClarificationEngine:
@@ -48,20 +49,6 @@ class ClarificationEngine:
         if release:
             self.release_questions()
         return "ASK"
-
-    def rank_pending(self) -> list[dict[str, object]]:
-        """Rank pending questions by their type, uncertainty, and amount."""
-        with Session(self.engine) as session:
-            rows = session.execute(
-                select(questions_table, transactions_table.c.amount,
-                       transactions_table.c.confidence_score)
-                .select_from(questions_table.outerjoin(
-                    transactions_table,
-                    questions_table.c.transaction_id == transactions_table.c.id,
-                ))
-                .where(questions_table.c.status == "PENDING")
-            ).mappings().all()
-        return self._rank_rows(rows)
 
     def release_questions(
         self, now: datetime | None = None, ignore_daily_cap: bool = False
@@ -116,13 +103,26 @@ class ClarificationEngine:
 
     def location_question(self, transaction: Transaction) -> None:
         """Create a location question for missing or unusual locations."""
-        if transaction.location is None or transaction.location not in (
-            "Birmingham", "Coventry", "Solihull"
+        with Session(self.engine) as session:
+            previous_locations = session.execute(
+                select(transactions_table.c.location).where(
+                    transactions_table.c.merchant_clean == transaction.merchant_clean,
+                    transactions_table.c.id != transaction.id,
+                    transactions_table.c.location.is_not(None),
+                ).distinct()
+            ).scalars().all()
+        if transaction.location is None or (
+            previous_locations and transaction.location not in previous_locations
         ):
+            usual = ", ".join(previous_locations)
+            prompt = (
+                f"Where did this {transaction.merchant_clean} payment happen?"
+                if not usual else
+                f"This {transaction.merchant_clean} payment is in {transaction.location}; "
+                f"previous payments were in {usual}. Is this location correct?"
+            )
             self._create_question(
-                transaction, "LOCATION",
-                f"Where should I record the location for {transaction.merchant_clean}?",
-                [],
+                transaction, "LOCATION", prompt, list(previous_locations),
             )
 
     def recurring_question(self, transaction: Transaction) -> None:
@@ -164,7 +164,10 @@ class ClarificationEngine:
 
     def extra_info_question(self, transaction: Transaction) -> None:
         """Ask about unusually large or unrecognised transactions."""
-        if transaction.amount >= 100.0:
+        if (
+            transaction.amount >= EXTRA_INFO_MIN_AMOUNT
+            and transaction.category == "Other"
+        ):
             self._create_question(transaction, "EXTRA_INFO",
                                   f"What was this £{transaction.amount:.2f} for? Is it one-off or recurring?",
                                   ["One-off", "Recurring"])

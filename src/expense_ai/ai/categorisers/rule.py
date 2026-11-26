@@ -20,6 +20,15 @@ class RuleCategoriser(Categoriser):
         path = rules_path or Path(__file__).resolve().parents[4] / "config" / "default_rules.json"
         self.rules = json.loads(Path(path).read_text())
         self.engine = engine
+        self._learned_rules_cache: list[tuple[str, str, int]] | None = None
+
+    def begin_batch(self) -> None:
+        """Cache learned rules for one ingestion batch."""
+        self._learned_rules_cache = self._query_learned_rules()
+
+    def end_batch(self) -> None:
+        """Release learned rules cached for the completed ingestion batch."""
+        self._learned_rules_cache = None
 
     def categorise(self, transaction: Transaction) -> Prediction:
         """Return a confident rule prediction when a pattern matches."""
@@ -39,7 +48,13 @@ class RuleCategoriser(Categoriser):
         return Prediction("Other", 0.20, "No merchant rule matched.", "RULE")
 
     def _learned_rules(self) -> list[tuple[str, str, int]]:
-        """Read promoted rules each time so new feedback is immediately available."""
+        """Return the batch cache or load currently promoted rules."""
+        if self._learned_rules_cache is not None:
+            return self._learned_rules_cache
+        return self._query_learned_rules()
+
+    def _query_learned_rules(self) -> list[tuple[str, str, int]]:
+        """Load learned rules in priority order."""
         if self.engine is None:
             return []
         with Session(self.engine) as session:

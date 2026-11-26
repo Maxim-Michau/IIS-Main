@@ -14,7 +14,11 @@ def render(service: object) -> None:
     frame = pd.DataFrame([vars(transaction) for transaction in transactions])
     search = st.text_input("Search merchant")
     if search:
-        frame = frame[frame["merchant_raw"].str.contains(search, case=False, na=False)]
+        frame = frame[
+            frame["merchant_raw"].str.contains(
+                search, case=False, na=False, regex=False
+            )
+        ]
     st.dataframe(frame, use_container_width=True)
     st.subheader("Activity log")
     activity = service.get_activity_log(limit=30)

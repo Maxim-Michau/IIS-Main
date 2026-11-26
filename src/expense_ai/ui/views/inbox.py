@@ -38,10 +38,10 @@ def render(service: object) -> None:
         st.success("No pending questions.")
         return
     transactions = service.get_transactions()
+    category_options = list(dict.fromkeys(
+        CATEGORIES + [transaction.category for transaction in transactions]
+    ))
     by_id = {transaction.id: transaction for transaction in transactions}
-    usual_locations = Counter(
-        transaction.location for transaction in transactions if transaction.location
-    )
     by_merchant: dict[str, list[dict[str, object]]] = defaultdict(list)
     for question in questions:
         transaction = by_id.get(question["transaction_id"])
@@ -75,7 +75,16 @@ def render(service: object) -> None:
                 key=lambda item: item.timestamp,
                 reverse=True,
             )
-            locations = Counter(item.location for item in previous if item.location)
+            location_question_ids = {
+                question["transaction_id"]
+                for question in merchant_questions
+                if question["question_type"] == "LOCATION"
+            }
+            locations = Counter(
+                item.location
+                for item in merchant_transactions
+                if item.location and item.id not in location_question_ids
+            )
             weekdays = Counter(item.timestamp.strftime("%A") for item in previous)
             if previous:
                 st.markdown("**Your previous transactions at this merchant**")
@@ -117,9 +126,11 @@ def render(service: object) -> None:
                 question_id = question["id"]
                 st.markdown(f"**{question['prompt_text']}**")
                 if question_type == "CATEGORY":
-                    _category_controls(service, question_id, grouped_questions)
+                    _category_controls(
+                        service, question_id, grouped_questions, category_options
+                    )
                 elif question_type == "LOCATION":
-                    _location_controls(service, question_id, usual_locations)
+                    _location_controls(service, question_id, locations)
                 else:
                     options = list(dict.fromkeys(
                         option for item in grouped_questions
@@ -147,6 +158,7 @@ def _category_controls(
     service: object,
     question_id: int,
     questions: list[dict[str, object]],
+    categories: list[str],
 ) -> None:
     suggestions = list(dict.fromkeys(
         option for question in questions
@@ -158,7 +170,7 @@ def _category_controls(
             _answer(service, question_id, category)
             st.rerun()
 
-    categories = list(dict.fromkeys(CATEGORIES + suggestions))
+    categories = list(dict.fromkeys(categories + suggestions))
     selected = st.selectbox(
         "All categories",
         categories,
